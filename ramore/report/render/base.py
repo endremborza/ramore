@@ -21,7 +21,8 @@ ASSET_DIR = Path(__file__).parent.parent / "assets"
 HOT_WINDOW_DAYS = 31
 RUNS_SHOWN = 200
 
-# The columns the pages read. Projecting at scan time keeps the window's free-text columns and the
+# The columns the pages read: the last day's events, and the `HOT_WINDOW_DAYS` window's (only the
+# landing and errors pages read it). Projecting at scan time keeps the free-text columns and the
 # addresses (`addr`, the only PII) out of the render, so neither site needs anonymizing.
 EVENT_RENDER_COLS = [
     "t",
@@ -34,6 +35,7 @@ EVENT_RENDER_COLS = [
     "referrer_domain",
     "size",
 ]
+WINDOW_RENDER_COLS = ["t", "status", "cs", "urt", "route_template"]
 SESSION_RENDER_COLS = [
     "start",
     "end",
@@ -86,13 +88,16 @@ def build_context(mode: Mode) -> RenderContext:
     )
     env.filters |= {"fmt_int": fmt_int, "fmt_pct": fmt_pct, "fmt_ms": fmt_ms}
 
+    day_ago = now - dt.timedelta(days=1)
     with timing.timed(f"render.{mode}.read_hot"):
-        events_hot = archive.read_hot(date_from=window_start, columns=EVENT_RENDER_COLS)
-    events_24h = (
-        events_hot.filter(pl.col("t") >= now - dt.timedelta(days=1))
-        if not events_hot.is_empty()
-        else events_hot
-    )
+        events_hot = archive.read_hot(
+            date_from=window_start, columns=WINDOW_RENDER_COLS
+        )
+        events_24h = archive.read_hot(
+            date_from=day_ago.date(), columns=EVENT_RENDER_COLS
+        )
+    if not events_24h.is_empty():
+        events_24h = events_24h.filter(pl.col("t") >= day_ago)
     with timing.timed(f"render.{mode}.load_sessions"):
         sessions_table = aggregate.load_sessions(window_start, SESSION_RENDER_COLS)
     with timing.timed(f"render.{mode}.load_aggregates"):
