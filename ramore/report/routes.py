@@ -10,7 +10,6 @@ alternative without one.
 from __future__ import annotations
 
 import re
-from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -92,11 +91,6 @@ def table() -> RouteTable:
 
 def template(path: str) -> str:
     return table().template(path)
-
-
-def collect_unmatched(paths) -> Counter:
-    t = table()
-    return Counter(p for p in paths if t.template(p) == UNKNOWN)
 
 
 def build(api: tuple[str, ...], sveltekit: Path | None) -> RouteTable:

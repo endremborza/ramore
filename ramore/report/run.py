@@ -5,8 +5,9 @@ import json
 import sys
 import time
 import traceback
+from contextlib import contextmanager
 from itertools import batched
-from typing import Literal
+from typing import Iterator, Literal
 
 import polars as pl
 
@@ -16,6 +17,7 @@ from . import (
     archive,
     metrics,
     parse,
+    publish,
     pull,
     render,
     routes,
@@ -26,6 +28,10 @@ from . import (
 from .classify import annotate_events, classify_sessions
 from .state import Offset
 
+Mode = Literal["local", "public", "both"]
+TOP_UNMATCHED = 20
+RECLASSIFY_BATCH_DAYS = 7
+
 
 def main(
     *,
@@ -34,7 +40,7 @@ def main(
     render_only: bool = False,
     dry_run: bool = False,
     reclassify_all: bool = False,
-    mode: Literal["local", "public", "both"] = "public",
+    mode: Mode = "public",
     config_file: str = config.CONFIG_NAME,
 ) -> None:
     """Pull the new log lines, archive, aggregate, render and publish the report.
@@ -46,97 +52,80 @@ def main(
     the site local, as does an app without a [publish] section.
     """
     config.use(config.load(config_file)).ensure_dirs()
-    run_log = _open_run_log()
-    run_record = {"ts": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")}
+    with run_record() as rec:
+        if dry_run:
+            _dry_run(rec)
+            return
+        if reclassify_all:
+            _reclassify_all(rec)
+        elif not render_only:
+            dates = None if no_pull else _pull(rec)
+            with timing.timed("aggregate"):
+                rec["aggregates"] = (
+                    aggregate.rebuild() if dates is None else aggregate.update(dates)
+                )
+        do_render(mode, rec, push=not no_publish)
+
+
+@contextmanager
+def run_record() -> Iterator[dict]:
+    """A run's record (counts, timings, errors), appended to the day's run log once it ends."""
+    rec: dict = {"ts": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")}
     started = time.time()
     try:
-        if dry_run:
-            _do_dry_run(run_record)
-        elif render_only:
-            _do_render(mode, no_publish, run_record)
-        elif reclassify_all:
-            _do_reclassify_all(run_record)
-            _do_render(mode, no_publish, run_record)
-        else:
-            if not no_pull:
-                affected_dates = _do_pull_and_archive(run_record)
-                _do_aggregate(run_record, affected_dates)
-            else:
-                _do_aggregate(run_record, None)
-            _do_render(mode, no_publish, run_record)
-        run_record["status"] = "ok"
+        yield rec
+        rec["status"] = "ok"
     except Exception as exc:
-        run_record["status"] = "error"
-        run_record["error"] = repr(exc)
-        run_record["trace"] = traceback.format_exc()
-        run_log(run_record)
+        rec |= {"status": "error", "error": repr(exc), "trace": traceback.format_exc()}
         raise
     finally:
-        run_record["duration_s"] = round(time.time() - started, 2)
-        run_record["timings"] = timing.get()
-        run_log(run_record)
+        rec["duration_s"] = round(time.time() - started, 2)
+        rec["timings"] = timing.get()
+        line = json.dumps(rec, default=str)
+        log = config.get().run_logs_dir / f"run-{dt.date.today().isoformat()}.log"
+        with log.open("a") as f:
+            f.write(line + "\n")
+        print(line, file=sys.stderr)
 
 
-def _open_run_log():
-    today = dt.date.today().isoformat()
-    log_path = config.get().run_logs_dir / f"run-{today}.log"
-
-    def write(record: dict) -> None:
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        with log_path.open("a") as f:
-            f.write(json.dumps(record, default=str) + "\n")
-        print(json.dumps(record, default=str), file=sys.stderr)
-
-    return write
-
-
-_RECLASSIFY_BATCH = 7
-
-
-def _do_reclassify_all(rec: dict) -> None:
-    all_dates = archive.list_hot_dates()
-    n_sessions = 0
-    aggregate.purge_sessions()
-    with timing.timed("reclassify"):
-        for batch in batched(all_dates, _RECLASSIFY_BATCH):
-            df = archive.read_hot(date_from=batch[0], date_to=batch[-1])
-            if df.is_empty() or "session_id" not in df.columns:
-                continue
-            sess_df = classify_sessions(df)
-            annotated = annotate_events(df, sess_df)
-            for d in batch:
-                day_df = annotated.filter(pl.col("t").dt.date() == d)
-                if not day_df.is_empty():
-                    archive.rewrite_hot(d, day_df)
-            n_sessions += len(sess_df)
-            aggregate.update_sessions(sess_df)
-    rec["reclassified_dates"] = len(all_dates)
-    rec["reclassified_sessions"] = n_sessions
-    with timing.timed("aggregate"):
-        rec["aggregates"] = aggregate.rebuild()
+def ingest(lines: list[str], s: state.State, rec: dict) -> list[dt.date]:
+    """Request-log lines into the archive and the sessions table; the days they wrote to."""
+    with timing.timed("ingest.parse"):
+        df = _parse(lines, rec)
+    if df.is_empty():
+        return []
+    with timing.timed("ingest.sessions"):
+        df = sessions.assign_sessions(df)
+    with timing.timed("ingest.classify"):
+        sess = classify_sessions(df)
+        aggregate.update_sessions(sess)
+        df = annotate_events(df, sess)
+    with timing.timed("ingest.write"):
+        rec["written_per_day"] = archive.write_events(df)
+    with timing.timed("ingest.compress_cold"):
+        if cold := archive.compress_cold(today=dt.date.today()):
+            rec["cold_compaction"] = cold
+    s.last_event_ts = str(df["t"].max())
+    return [dt.date.fromisoformat(d) for d in rec["written_per_day"]]
 
 
-def _do_dry_run(rec: dict) -> None:
-    rec["box_current"] = box.is_current(config.get())
-    s = state.load()
-    fetched = pull.fetch_new_lines(
-        box.REQUEST_LOG, s.offsets.get(box.REQUEST_LOG, Offset())
-    )
-    df, fail = parse.parse_lines(fetched.lines)
-    df, non_live = parse.keep_live_hosts(df)
-    rec["lines_fetched"] = len(fetched.lines)
-    rec["events_parsed"] = len(df)
-    rec["parse_failures"] = fail
-    rec["non_live_dropped"] = non_live
-    rec["rotated"] = fetched.rotated
-    if not df.is_empty():
-        rec["t_min"] = str(df["t"].min())
-        rec["t_max"] = str(df["t"].max())
-    unmatched = routes.collect_unmatched(df["path"].to_list())
-    rec["top_unmatched"] = list(unmatched.most_common(20))
+def do_render(mode: Mode, rec: dict, push: bool = True) -> None:
+    """Render the `mode` sites; publish the public one when the app has a [publish] section."""
+    modes: list[render.Mode] = ["local", "public"] if mode == "both" else [mode]
+    rec["rendered"] = modes
+    for m in modes:
+        render.render_all(m)
+    if not push or "public" not in modes or config.get().publish is None:
+        return
+    with timing.timed("publish"):
+        try:
+            rec["published"] = publish.publish()
+        except Exception as exc:
+            rec["published"] = False
+            rec["publish_error"] = repr(exc)
 
 
-def _do_pull_and_archive(rec: dict) -> list[dt.date]:
+def _pull(rec: dict) -> list[dt.date]:
     cfg = config.get()
     with timing.timed("box"):
         rec["box_installed"] = box.ensure(cfg)
@@ -144,68 +133,53 @@ def _do_pull_and_archive(rec: dict) -> list[dt.date]:
     if cfg.metrics is not None:
         with timing.timed("pull.metrics"):
             _pull_metrics(s, rec)
-
-    with timing.timed("pull.fetch"):
-        fetched = pull.fetch_new_lines(
-            box.REQUEST_LOG, s.offsets.get(box.REQUEST_LOG, Offset())
-        )
-    with timing.timed("pull.parse"):
-        df, fail = parse.parse_lines(fetched.lines)
-        df, non_live = parse.keep_live_hosts(df)
-
-    rec["lines_fetched"] = len(fetched.lines)
-    rec["events_parsed"] = len(df)
-    rec["parse_failures"] = fail
-    rec["non_live_dropped"] = non_live
+    with timing.timed("pull.requests"):
+        fetched = _fetch(s, box.REQUEST_LOG)
     rec["rotated"] = fetched.rotated
-
-    if df.is_empty():
-        s.offsets[box.REQUEST_LOG] = fetched.offset
-        s.last_run = state.now_iso()
-        s.lines_pulled_last_run = len(fetched.lines)
-        s.parse_failures_last_run = fail
-        state.save(s)
-        return []
-
-    with timing.timed("pull.annotate_routes"):
-        df = archive.annotate_routes(df)
-    with timing.timed("pull.assign_sessions"):
-        df = sessions.assign_sessions(df)
-    with timing.timed("pull.classify_sessions"):
-        sess_df = classify_sessions(df)
-    with timing.timed("pull.annotate_events"):
-        aggregate.update_sessions(sess_df)
-        df = archive.add_date_partition_cols(df)
-        df = annotate_events(df, sess_df)
-    with timing.timed("pull.write_events"):
-        written = archive.write_events(df)
-    with timing.timed("pull.compress_cold"):
-        cold = archive.compress_cold(today=dt.date.today())
-
-    if cold:
-        rec["cold_compaction"] = cold
-    unmatched = routes.collect_unmatched(df["path"].to_list())
-    if unmatched:
-        rec["top_unmatched"] = list(unmatched.most_common(20))
-
+    dates = ingest(fetched.lines, s, rec)
     s.offsets[box.REQUEST_LOG] = fetched.offset
-    s.last_event_ts = str(df["t"].max())
     s.last_run = state.now_iso()
-    s.salt_date = state.today_iso()
-    s.lines_pulled_last_run = len(fetched.lines)
-    s.parse_failures_last_run = fail
     state.save(s)
-    rec["written_per_day"] = written
-    return [dt.date.fromisoformat(d) for d in written]
+    return dates
+
+
+def _dry_run(rec: dict) -> None:
+    rec["box_current"] = box.is_current(config.get())
+    fetched = _fetch(state.load(), box.REQUEST_LOG)
+    rec["rotated"] = fetched.rotated
+    df = _parse(fetched.lines, rec)
+    if not df.is_empty():
+        rec["t_min"], rec["t_max"] = str(df["t"].min()), str(df["t"].max())
+
+
+def _fetch(s: state.State, log: str) -> pull.FetchResult:
+    return pull.fetch_new_lines(log, s.offsets.get(log, Offset()))
+
+
+def _parse(lines: list[str], rec: dict) -> pl.DataFrame:
+    """The app's requests among `lines`, typed and templated; their counts go to `rec`."""
+    df, failures = parse.parse_lines(lines)
+    df, dropped = parse.keep_live_hosts(df)
+    df = archive.annotate_routes(df)
+    unmatched = df.filter(pl.col("route_template") == routes.UNKNOWN)["path"]
+    rec |= {
+        "lines_fetched": len(lines),
+        "events_parsed": len(df),
+        "parse_failures": failures,
+        "non_live_dropped": dropped,
+    }
+    if len(unmatched):
+        rec["top_unmatched"] = (
+            unmatched.value_counts(sort=True).head(TOP_UNMATCHED).rows()
+        )
+    return df
 
 
 def _pull_metrics(s: state.State, rec: dict) -> None:
-    fetched = pull.fetch_new_lines(
-        box.METRICS_LOG, s.offsets.get(box.METRICS_LOG, Offset())
-    )
-    df, fail = metrics.parse_lines(fetched.lines)
+    fetched = _fetch(s, box.METRICS_LOG)
+    df, failures = metrics.parse_lines(fetched.lines)
     rec["metrics_rows"] = metrics.write(df)
-    rec["metrics_parse_failures"] = fail
+    rec["metrics_parse_failures"] = failures
     s.offsets[box.METRICS_LOG] = fetched.offset
     if not df.is_empty():
         checks = metrics.checks(df, config.get().alerts)
@@ -213,37 +187,18 @@ def _pull_metrics(s: state.State, rec: dict) -> None:
         rec["alerts"] = [f"{e.kind} {e.key}: {e.detail}" for e in events]
 
 
-def _do_aggregate(rec: dict, affected_dates: list[dt.date] | None) -> None:
+def _reclassify_all(rec: dict) -> None:
+    dates = archive.list_hot_dates()
+    n_sessions = 0
+    aggregate.purge_sessions()
+    with timing.timed("reclassify"):
+        for batch in batched(dates, RECLASSIFY_BATCH_DAYS):
+            df = archive.read_hot(batch[0], batch[-1])
+            sess = classify_sessions(df)
+            aggregate.update_sessions(sess)
+            archive.rewrite_days(annotate_events(df, sess))
+            n_sessions += len(sess)
+    rec["reclassified_dates"] = len(dates)
+    rec["reclassified_sessions"] = n_sessions
     with timing.timed("aggregate"):
-        if affected_dates is None:
-            res = aggregate.rebuild()
-        elif not affected_dates:
-            rec["aggregates"] = {"skipped": True}
-            return
-        elif not aggregate.hourly_exists():
-            res = aggregate.rebuild()
-        else:
-            res = aggregate.update(affected_dates)
-    rec["aggregates"] = res
-
-
-def _do_render(mode: str, no_publish: bool, rec: dict) -> None:
-    rendered = []
-    if mode in ("local", "both"):
-        render.render_all("local")
-        rendered.append("local")
-    if mode in ("public", "both"):
-        render.render_all("public")
-        rendered.append("public")
-    rec["rendered"] = rendered
-
-    if "public" in rendered and not no_publish and config.get().publish is not None:
-        from . import publish
-
-        with timing.timed("publish"):
-            try:
-                publish.publish_to_ghpages()
-                rec["published"] = True
-            except Exception as exc:
-                rec["published"] = False
-                rec["publish_error"] = repr(exc)
+        rec["aggregates"] = aggregate.rebuild()
