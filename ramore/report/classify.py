@@ -15,7 +15,7 @@ from urllib.parse import urlsplit
 
 import polars as pl
 
-from .. import config
+from .. import MONITOR_PRODUCT, config
 from . import routes
 
 # --- bot-class labels ----------------------------------------------------
@@ -63,6 +63,7 @@ def _rx(s: str) -> re.Pattern:
 
 
 UA_FAMILIES: list[UAFamily] = [
+    UAFamily(MONITOR_PRODUCT, _rx(re.escape(MONITOR_PRODUCT)), True),
     UAFamily("gptbot", _rx(r"GPTBot"), True),
     UAFamily("claudebot", _rx(r"ClaudeBot"), True),
     UAFamily("perplexitybot", _rx(r"PerplexityBot"), True),

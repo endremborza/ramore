@@ -4,7 +4,13 @@ from protocli import Dispatcher
 def main() -> None:
     Dispatcher(
         "ramore",
-        {"report": "ramore.report.run", "reset": "ramore.report.reset"},
+        {
+            "report": "ramore.report.run",
+            "reset": "ramore.report.reset",
+            "box": "ramore.box",
+            "monitor": "ramore.monitor",
+            "units": "ramore.units",
+        },
     ).run()
 
 
