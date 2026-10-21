@@ -13,7 +13,7 @@ from .base import (
     hint,
     plotly_div,
     render_template,
-    time_series_traces,
+    traces,
     write,
 )
 
@@ -87,7 +87,7 @@ def _chart(fig_id: str, df: pl.DataFrame, y: str, unit: str) -> str:
         return hint("No data.")
     return plotly_div(
         fig_id,
-        time_series_traces(df, "t", y, "series"),
+        traces(df, "t", y, "series"),
         {"yaxis": {"title": unit, "rangemode": "tozero"}},
     )
 

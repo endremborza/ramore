@@ -1,5 +1,18 @@
+{% macro kpi_grid(k) %}
+<div class="kpi-grid">
+{% for c in k.cards %}
 <div class="kpi-card">
-  <div class="kpi-label">{{ label }}</div>
-  <div class="kpi-value">{{ value }}</div>
-  {% if sub %}<div class="kpi-sub">{{ sub }}</div>{% endif %}
+  <div class="kpi-label">{{ c.label }}</div>
+  <div class="kpi-value">{{ c.value }}</div>
+  {% if c.sub %}<div class="kpi-sub">{{ c.sub }}</div>{% endif %}
 </div>
+{% endfor %}
+{% if k.classes %}
+<div class="kpi-card kpi-breakdown">
+  <div class="kpi-label">Sessions by class</div>
+  <div class="bot-bar">{% for s in k.classes %}<span class="seg" style="background:{{ s.color }};width:{{ '%.2f' % s.pct }}%" title="{{ s.cls }}: {{ s.n }} ({{ '%.1f' % s.pct }}%)"></span>{% endfor %}</div>
+  <div class="bot-legend">{% for s in k.classes %}<span class="legend-item"><span class="dot" style="background:{{ s.color }}"></span>{{ s.cls }} {{ s.n }}</span> {% endfor %}</div>
+</div>
+{% endif %}
+</div>
+{% endmacro %}

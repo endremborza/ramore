@@ -3,7 +3,18 @@
 {% block title %}Runs{% endblock %}
 {% block content %}
 <h1>Run history</h1>
-{{ runs_table | safe }}
+{% if runs %}
+<table class="dt" id="runs">
+<thead><tr><th>run</th>{% for c in columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+<tbody>
+{% for r in runs %}
+<tr><td><a href="{{ r.ts }}.html">{{ r.ts }}</a></td>{% for c in columns %}<td>{{ r.get(c, '') }}</td>{% endfor %}</tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<p class="hint">No run history yet.</p>
+{% endif %}
 
 <script>
 document.addEventListener("DOMContentLoaded", () => {

@@ -1,15 +1,14 @@
 {% extends "_base.html.j2" %}
+{% from "_kpi_card.html.j2" import kpi_grid %}
 {% set depth = 0 %}
 {% block title %}{{ site_name }} — landing{% endblock %}
 {% block content %}
 <h1>Overview</h1>
 
-{% for label, k in [('Last 1h', '1h'), ('Last 24h', '24h'), ('Last 7d', '7d'), ('Last 30d', '30d')] %}
+{% for label, k in windows.items() %}
 <section class="kpi-section">
 <h2>{{ label }}</h2>
-<div class="kpi-grid">
-{{ kpis[k].html | safe }}
-</div>
+{{ kpi_grid(k) }}
 </section>
 {% endfor %}
 
