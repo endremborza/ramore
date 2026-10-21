@@ -1,0 +1,40 @@
+[project]
+name = "ramore"
+description = "ramore monitoring and reporting: an nginx access-log report site and a live-site monitor"
+dynamic = ["version"]
+authors = [{name = "Endre Márk Borza", email = "endremborza@gmail.com"}]
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "jinja2>=3.1.6",
+    "pandas>=3.0.1",
+    "polars>=1.12.0,<2",
+    "protocli>=0.1.0",
+    "pyarrow>=23.0.1",
+    "shackleton>=1.2.0",
+]
+
+[project.scripts]
+ramore = "ramore.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/endremborza/ramore"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "ramore/__init__.py"
+
+[tool.pytest.ini_options]
+testpaths = ["ramore/tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]  # the formatter owns line length
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
