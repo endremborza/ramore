@@ -1,5 +1,5 @@
 import json
-from typing import Iterable
+from typing import Callable, Iterable
 
 import polars as pl
 
@@ -63,6 +63,16 @@ def parse_lines(lines: Iterable[str]) -> tuple[pl.DataFrame, int]:
 
 def epoch_to_datetime(seconds: pl.Expr) -> pl.Expr:
     return (seconds * 1_000_000).round(0).cast(pl.Int64).cast(pl.Datetime("us", "UTC"))
+
+
+def map_distinct(
+    df: pl.DataFrame, col: str, fn: Callable[[str], str], alias: str
+) -> pl.DataFrame:
+    """`df` with `alias` = `fn(col)`, called once per distinct value of `col`."""
+    lookup = df.select(pl.col(col).unique()).with_columns(
+        pl.col(col).map_elements(fn, return_dtype=pl.String).alias(alias)
+    )
+    return df.join(lookup, on=col, how="left", join_nulls=True)
 
 
 def keep_live_hosts(df: pl.DataFrame) -> tuple[pl.DataFrame, int]:
