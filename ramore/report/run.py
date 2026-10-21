@@ -199,6 +199,20 @@ def _do_pull_and_archive(rec: dict) -> list[dt.date]:
     return [dt.date.fromisoformat(d) for d in written]
 
 
+def _pull_metrics(s: state.State, rec: dict) -> None:
+    fetched = pull.fetch_new_lines(
+        box.METRICS_LOG, s.offsets.get(box.METRICS_LOG, Offset())
+    )
+    df, fail = metrics.parse_lines(fetched.lines)
+    rec["metrics_rows"] = metrics.write(df)
+    rec["metrics_parse_failures"] = fail
+    s.offsets[box.METRICS_LOG] = fetched.offset
+    if not df.is_empty():
+        checks = metrics.checks(df, config.get().alerts)
+        events = alert.run_step("report", checks, time.time(), sustain_s=0)
+        rec["alerts"] = [f"{e.kind} {e.key}: {e.detail}" for e in events]
+
+
 def _do_aggregate(rec: dict, affected_dates: list[dt.date] | None) -> None:
     with timing.timed("aggregate"):
         if affected_dates is None:

@@ -1,11 +1,12 @@
+import dataclasses
 import datetime as dt
 import json
 import re
 
 import polars as pl
 
-from ramore import config
-from ramore.report import aggregate, archive
+from ramore import SITE_STATE, config
+from ramore.report import aggregate, archive, metrics
 from ramore.report.archive import annotate_routes
 from ramore.report.classify import annotate_events, classify_sessions
 from ramore.report.parse import parse_lines
@@ -45,6 +46,38 @@ def test_render_local_mode():
     assert (ctx.out_dir / "assets" / "style.css").exists()
     landing = (ctx.out_dir / "index.html").read_text()
     assert "<title>" in landing
+    site_state = json.loads((ctx.out_dir / SITE_STATE).read_text())
+    assert set(site_state) == {"last_run", "last_event_ts"}
+
+
+def test_box_page_is_local_only():
+    config.use(
+        dataclasses.replace(
+            config.get(), metrics=config.Metrics(60, ("/",), ("app.service",))
+        )
+    )
+    _populate()
+    t = dt.datetime.now(dt.timezone.utc).timestamp()
+    lines = [
+        json.dumps({"t": t, "scope": "host", "name": "", "used": 6, "limit": 10}),
+        json.dumps(
+            {
+                "t": t,
+                "scope": "unit",
+                "name": "app.service",
+                "used": 5,
+                "anon": 3,
+                "fds": 9,
+            }
+        ),
+    ]
+    metrics.write(metrics.parse_lines(lines)[0])
+    local = render_all("local").out_dir
+    assert "app.service" in (local / "box.html").read_text()
+    assert 'href="box.html"' in (local / "index.html").read_text()
+    public = render_all("public").out_dir
+    assert not (public / "box.html").exists()
+    assert 'href="box.html"' not in (public / "index.html").read_text()
 
 
 def _write_failed_run(ts: str, ip: str) -> None:

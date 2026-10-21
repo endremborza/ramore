@@ -21,6 +21,9 @@
       <li><a href="{{ '../' * depth }}errors.html" {% if active_page == 'errors' %}class="active"{% endif %}>Errors</a></li>
       <li><a href="{{ '../' * depth }}sessions/index.html" {% if active_page == 'sessions' %}class="active"{% endif %}>Sessions</a></li>
       <li><a href="{{ '../' * depth }}classification.html" {% if active_page == 'classification' %}class="active"{% endif %}>Classification</a></li>
+{% if box_page %}
+      <li><a href="{{ '../' * depth }}box.html" {% if active_page == 'box' %}class="active"{% endif %}>Box</a></li>
+{% endif %}
       <li><a href="{{ '../' * depth }}runs/index.html" {% if active_page == 'runs' %}class="active"{% endif %}>Runs</a></li>
     </ul>
     <span class="mode-badge mode-{{ mode }}">{{ mode }}</span>

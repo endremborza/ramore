@@ -147,9 +147,15 @@ def render_template(ctx: RenderContext, template: str, **vars) -> str:
         "now_iso": ctx.now.isoformat(timespec="seconds"),
         "state": ctx.state_snapshot,
         "active_page": "",
+        "box_page": box_enabled(ctx),
     }
     base_vars.update(vars)
     return tpl.render(**base_vars)
+
+
+def box_enabled(ctx: RenderContext) -> bool:
+    """The box page renders on the local site of an app with `[metrics]`."""
+    return ctx.mode == "local" and config.get().metrics is not None
 
 
 def plotly_div(

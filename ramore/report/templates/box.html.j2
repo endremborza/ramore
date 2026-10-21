@@ -1,0 +1,32 @@
+{% extends "_base.html.j2" %}
+{% set depth = 0 %}
+{% block title %}Box{% endblock %}
+{% block content %}
+<h1>Box</h1>
+<p class="hint">The last {{ days }} days of the box sampler, each series at its maximum per {{ bucket }}. Local site only.</p>
+
+<section>
+<h2>Latest sample</h2>
+{{ latest_table | safe }}
+</section>
+
+<section>
+<h2>Memory and disk fill</h2>
+{{ fill_chart | safe }}
+</section>
+
+<section>
+<h2>Unit anon memory</h2>
+{{ anon_chart | safe }}
+</section>
+
+<section>
+<h2>Unit memory, page cache included</h2>
+{{ mem_chart | safe }}
+</section>
+
+<section>
+<h2>Unit open files</h2>
+{{ fds_chart | safe }}
+</section>
+{% endblock %}
