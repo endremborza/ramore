@@ -3,6 +3,7 @@ name = "ramore"
 description = "ramore monitoring and reporting: an nginx access-log report site and a live-site monitor"
 dynamic = ["version"]
 authors = [{name = "Endre Márk Borza", email = "endremborza@gmail.com"}]
+license = {file = "LICENSE"}
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

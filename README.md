@@ -1,11 +1,13 @@
 # ramore
 
+[![pypi](https://img.shields.io/pypi/v/ramore.svg)](https://pypi.org/project/ramore/)
+
 ramore monitoring and reporting. ramore installs its own side on the box serving a site (an nginx request log in its JSON format, and optionally a sampler of the box's memory, disks and units). `ramore report` pulls both logs over ssh, archives every request in a partitioned parquet store, sorts sessions into bots and humans, and publishes an anonymized static report site to the app repo's GitHub Pages branch. Extracted from the reporting pipeline of [rankless](https://github.com/endremborza/rankless).
 
 ## Install
 
 ```bash
-uv tool install -e /path/to/ramore   # or: uv tool install git+https://github.com/endremborza/ramore
+uv tool install ramore   # or, from a checkout with the locked versions: make install
 ```
 
 ## Use
