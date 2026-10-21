@@ -49,11 +49,11 @@ Under `store` (keep it out of git):
 - `metrics/year_month=YYYY-MM/`: the box samples, one row per scope and sample.
 - `site/` (raw values, local only), `site-public/` (anonymized, published), `logs/`, `state.json`, `salts.json`.
 
-The hot archive's columns are `archive.HOT_COLUMNS`. `route_template`, `ua_family`, `bot_class` and `session_id` are written at archive time, so a change to the route table or the rules applies to new rows; `ramore report --reclassify-all` re-classifies the hot days (not their templates) and rebuilds the aggregates.
+The hot archive's columns are `archive.HOT_COLUMNS`. `route_template`, `ua_family`, `bot_class` and `session_id` are written at archive time, so a change to the route table or the rules applies to new rows; `ramore report --reclassify-all` re-classifies the hot days one at a time (not their templates; a session crossing midnight is classified per day) and rebuilds the aggregates. A rebuild aggregates the archive one day at a time, reading each cold month once.
 
 ## Anonymization
 
-The public site carries no IP and no raw UA: the render reads neither (`render/base.EVENT_RENDER_COLS`, `SESSION_RENDER_COLS`), so UAs show as a family and a bot class, referrers as their registered domain. Every template autoescapes, so a request path someone sent (the runs pages list unmatched ones) cannot inject markup.
+The public site carries no IP and no raw UA: the render reads neither (`render/base.EVENT_RENDER_COLS`, `WINDOW_RENDER_COLS`, `SESSION_RENDER_COLS`), so UAs show as a family and a bot class, referrers as their registered domain. Every template autoescapes, so a request path someone sent (the runs pages list unmatched ones) cannot inject markup.
 
 ## Publish
 

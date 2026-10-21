@@ -2,6 +2,7 @@
 month into the cold archive without `FREE_TEXT_COLUMNS`."""
 
 import datetime as dt
+from typing import Iterator
 
 import polars as pl
 from shackleton import TableRepo
@@ -91,15 +92,20 @@ def read_hot(
     ]
     if not lfs:
         return pl.DataFrame()
-    lf = pl.concat(lfs, how="diagonal")
-    return (lf if columns is None else lf.select(columns)).collect()
+    return _collect(pl.concat(lfs, how="diagonal"), columns)
 
 
-def read_cold(columns: list[str]) -> pl.DataFrame:
-    cold = _cold()
-    if cold.n_files == 0:
-        return pl.DataFrame()
-    return cold.get_full_lf().select(columns).collect()
+def read_days(columns: list[str] | None = None) -> Iterator[pl.DataFrame]:
+    """The whole archive one day at a time: each hot day, then the days of each cold month (read
+    once per month)."""
+    hot, cold = _hot(), _cold()
+    for parts in _partitions(hot):
+        yield _collect(hot.get_partition_lf(parts), columns)
+    day = pl.col("t").dt.date()
+    for parts in _partitions(cold):
+        month = _collect(cold.get_partition_lf(parts), columns)
+        for d in month.select(day.unique().sort()).to_series():
+            yield month.filter(day == d)
 
 
 def compress_cold(today: dt.date) -> dict[str, int]:
@@ -135,6 +141,10 @@ def _partitions(repo: TableRepo) -> list[dict[str, str]]:
         dict(part.split("=", 1) for part in d.relative_to(repo.root_path).parts)
         for d in repo._partition_dirs
     ]
+
+
+def _collect(lf: pl.LazyFrame, columns: list[str] | None) -> pl.DataFrame:
+    return (lf if columns is None else lf.select(columns)).collect()
 
 
 def _n_rows(repo: TableRepo, parts: dict[str, str]) -> int:

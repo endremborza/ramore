@@ -14,20 +14,20 @@ AGG_COLS = ["t", "status", "cs", "bot_class", "urt", "size", "route_template"]
 
 
 def rebuild() -> dict[str, int]:
-    """Every level from the whole hot and cold archive."""
-    parts = [
-        f
-        for f in (archive.read_hot(columns=AGG_COLS), archive.read_cold(AGG_COLS))
-        if not f.is_empty()
-    ]
-    if not parts:
-        for level in LEVELS:
+    """Every level from the whole hot and cold archive, aggregated one day at a time (no bucket
+    spans two)."""
+    blocks: dict[str, list[pl.DataFrame]] = {level: [] for level in LEVELS}
+    rows = 0
+    for df in archive.read_days(AGG_COLS):
+        rows += len(df)
+        for level, every in LEVELS.items():
+            blocks[level].append(_agg_block(df, every))
+    out = {"rows": rows}
+    for level, aggs in blocks.items():
+        if not aggs:
             _repo(level).purge()
-        return {"rows": 0}
-    df = pl.concat(parts, how="diagonal")
-    out = {"rows": len(df)}
-    for level, every in LEVELS.items():
-        agg = _agg_block(df, every)
+            continue
+        agg = pl.concat(aggs, how="diagonal").sort("bucket")
         _repo(level).replace_all(agg)
         out[f"{level}_rows"] = len(agg)
     return out

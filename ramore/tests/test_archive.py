@@ -29,6 +29,6 @@ def test_compress_cold_moves_old_days():
     archive.write_events(df)
     assert sum(archive.compress_cold(today=dt.date.today()).values()) == 1
     assert archive.read_hot().is_empty()
-    cold = archive.read_cold(archive.COLD_COLUMNS)
+    cold = pl.concat(archive.read_days())
     assert len(cold) == len(df)
     assert not set(archive.FREE_TEXT_COLUMNS) & set(cold.columns)

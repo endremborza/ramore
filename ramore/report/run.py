@@ -6,7 +6,6 @@ import sys
 import time
 import traceback
 from contextlib import contextmanager
-from itertools import batched
 from typing import Iterator, Literal
 
 import polars as pl
@@ -30,7 +29,6 @@ from .state import Offset
 
 Mode = Literal["local", "public", "both"]
 TOP_UNMATCHED = 20
-RECLASSIFY_BATCH_DAYS = 7
 
 
 def main(
@@ -192,8 +190,8 @@ def _reclassify_all(rec: dict) -> None:
     n_sessions = 0
     aggregate.purge_sessions()
     with timing.timed("reclassify"):
-        for batch in batched(dates, RECLASSIFY_BATCH_DAYS):
-            df = archive.read_hot(batch[0], batch[-1])
+        for d in dates:
+            df = archive.read_hot(d, d)
             sess = classify_sessions(df)
             aggregate.update_sessions(sess)
             archive.rewrite_days(annotate_events(df, sess))
