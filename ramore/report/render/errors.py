@@ -54,7 +54,7 @@ def _err_table(events: pl.DataFrame, mask_fn, table_id: str) -> str:
                 pl.col("t").max().alias("last_seen"),
             ]
         )
-        .sort("n", descending=True)
+        .sort(["n", "route_template", "status"], descending=[True, False, False])
         .head(50)
         .with_columns(pl.col("last_seen").dt.strftime("%Y-%m-%d %H:%M UTC"))
     )

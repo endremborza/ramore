@@ -186,7 +186,7 @@ def traces(
     group: str,
     style: Callable[[str], dict] = lambda _: {"type": "scatter", "mode": "lines"},
 ) -> list[dict]:
-    """One plotly trace per value of `group`, `style(value)` merged in."""
+    """One plotly trace per value of `group`, in its order, `style(value)` merged in."""
     return [
         {
             "x": part[x].cast(pl.String).to_list(),
@@ -194,7 +194,7 @@ def traces(
             "name": str(part[group][0]),
             **style(part[group][0]),
         }
-        for part in df.sort(x).partition_by(group, maintain_order=True)
+        for part in df.sort(group, x).partition_by(group, maintain_order=True)
     ]
 
 

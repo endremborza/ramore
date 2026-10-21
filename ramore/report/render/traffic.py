@@ -49,15 +49,21 @@ def _top_uas(sessions: pl.DataFrame) -> str:
     if sessions.is_empty():
         return hint("No sessions.")
     per_class = (
-        sessions.lazy().group_by("ua_family", "bot_class").len().collect(streaming=True)
+        sessions.lazy()
+        .group_by("ua_family", "bot_class")
+        .len()
+        .collect(engine="streaming")
     )
     top = (
         per_class.group_by("ua_family")
         .agg(
             pl.col("len").sum().alias("sessions"),
-            pl.col("bot_class").sort_by("len").last().alias("dominant_class"),
+            pl.col("bot_class")
+            .sort_by("len", "bot_class")
+            .last()
+            .alias("dominant_class"),
         )
-        .sort("sessions", descending=True)
+        .sort(["sessions", "ua_family"], descending=[True, False])
         .head(TOP_N)
     )
     return df_to_html(top, table_id="top-uas")
@@ -87,7 +93,7 @@ def _top(events: pl.DataFrame, by: str, table_id: str, none: str) -> str:
     return df_to_html(
         events.group_by(by)
         .len("requests")
-        .sort("requests", descending=True)
+        .sort(["requests", by], descending=[True, False])
         .head(TOP_N),
         table_id=table_id,
     )

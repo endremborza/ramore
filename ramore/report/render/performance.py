@@ -49,7 +49,7 @@ def _route_table(events: pl.DataFrame) -> str:
             (((status >= 400) & (status < 500)).mean() * 100).round(2).alias("err_4xx"),
             ((pl.col("cs") == "HIT").mean() * 100).round(2).alias("cache_hit"),
         )
-        .sort("n", descending=True)
+        .sort(["n", "route_template"], descending=[True, False])
     )
     return df_to_html(g, table_id="route-perf")
 
@@ -113,7 +113,7 @@ def _slow_requests(events: pl.DataFrame) -> str:
         return hint("No data.")
     slow = (
         events.filter(pl.col("urt").is_not_null())
-        .sort("urt", descending=True)
+        .sort(["urt", "t"], descending=True)
         .head(SLOW_SHOWN)
         .select(
             "t",
