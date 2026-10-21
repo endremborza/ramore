@@ -13,7 +13,8 @@ ramore monitoring and reporting: `ramore report` turns a site's nginx request lo
 
 ## Rules
 
-- `make check` (ruff format + lint) and `make test` before every change.
+- `branb test` (ruff format + lint, then pytest with doctests and coverage, as CI runs it) before every change.
+- A release is `branb tag "notes" minor|bug|major` on main; the tag push publishes to PyPI once the tests pass.
 - `box/sample.py` runs on the box: stdlib only, Python 3.10+ (Ubuntu 22.04), no import from ramore.
 - polars stays below 2 (`pyproject.toml`): the suite breaks on 2.0. `make install` puts the `ramore` command on PATH with the locked versions; a bare `uv tool install` reads no lockfile.
 - One literal per value: a constant is written once, docs name it.
