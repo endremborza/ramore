@@ -21,9 +21,6 @@ class State:
     offsets: dict[str, Offset] = field(default_factory=dict)
     last_event_ts: str = ""
     last_run: str = ""
-    salt_date: str = ""
-    parse_failures_last_run: int = 0
-    lines_pulled_last_run: int = 0
 
 
 def load() -> State:
@@ -40,30 +37,16 @@ def save(s: State) -> None:
     _atomic_write_json(config.get().state_path, asdict(s))
 
 
-def today_iso() -> str:
-    return dt.date.today().isoformat()
-
-
 def now_iso() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
-def load_salts() -> dict[str, str]:
-    path = config.get().salts_path
-    if not path.exists():
-        return {}
-    return json.loads(path.read_text())
-
-
-def save_salts(salts: dict[str, str]) -> None:
-    _atomic_write_json(config.get().salts_path, salts)
-
-
 def get_or_create_salt(date_iso: str) -> str:
-    salts = load_salts()
+    path = config.get().salts_path
+    salts = json.loads(path.read_text()) if path.exists() else {}
     if date_iso not in salts:
         salts[date_iso] = secrets.token_hex(16)
-        save_salts(salts)
+        _atomic_write_json(path, salts)
     return salts[date_iso]
 
 
