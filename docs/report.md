@@ -4,22 +4,23 @@
 
 ## Run
 
-One run pulls the log lines appended since the last run, parses and keeps the app's hosts, templates each path, sessionizes and classifies, writes the hot archive, compacts old days into the cold archive, updates the hourly and daily aggregates, renders the local and/or public site and publishes the public one. Missed runs recover on their own through the byte-offset bookkeeping in `state.json`, rotation included: a changed inode pulls the rotated `<log>.1` tail first. A first run reads only the last `FIRST_RUN_TAIL_LINES` lines.
+One run brings ramore's side of the box up to date (The box, below), pulls the lines appended to its two logs since the last run, archives the metrics, parses the requests and keeps the app's hosts, templates each path, sessionizes and classifies, writes the hot archive, compacts old days into the cold archive, updates the hourly and daily aggregates, renders the local and/or public site and publishes the public one. Missed runs recover on their own through the per-log byte offsets in `state.json`, rotation included: a changed inode pulls the rotated `<log>.1` tail first. Each read stops at the size stat'd before it, so a line written meanwhile waits for the next run. A first read of a log takes only its last `FIRST_RUN_TAIL_BYTES`.
 
 Every run appends a JSON record (counts, timings, errors) to `logs/run-<date>.log`; the runs page lists them. Error text can echo raw log content, so the public site drops `error` and `trace` and only the local one keeps them.
 
-## Log format
+## The box
 
-The parser (`parse.LINE_RE`) reads this nginx `log_format`; `cs` gives the cache hit rate and `host` lets the report keep only the app's vhosts, as an allowlist (`[source] hosts`), since the box's log can mix in other vhosts and junk hitting it by raw IP or spoofed Host. `host` is never persisted.
+ramore owns everything it reads from the box (`ramore/box/`), rendered from the app's config: `box.files` is every file the box should hold, `box.STAMP` on the box the hash of the last install. A report run (or `ramore box`) compares the two and, when they differ, runs one install script with `sudo -n` over ssh; the stamp is written last, so a failed install is retried by the next run. Without `[metrics]` the install removes the sampler.
 
-```nginx
-log_format upstream_time '$remote_addr - $remote_user [$time_local] '
-                         '"$request" $status $body_bytes_sent '
-                         '"$http_referer" "$http_user_agent"'
-                         'rt=$request_time uct="$upstream_connect_time" uht="$upstream_header_time" urt="$upstream_response_time" cs=$upstream_cache_status host=$host';
-```
+**Request log.** `/etc/nginx/conf.d/ramore.conf` defines `log_format ramore escape=json` from `box.REQUEST_FIELDS` (each key and the nginx variable it carries, every value a JSON string) and an http-level `access_log` to `box.REQUEST_LOG`. Every server block without an `access_log` of its own inherits it, so the app's nginx config must set none; the distro's own http-level log keeps logging too. The install tests the config with `nginx -t` and restores the previous file when it fails. The distro logrotate (`/var/log/nginx/*.log`) rotates the log. A line that is not a JSON object with exactly the request keys counts as a parse failure in the run record. `cs` gives the cache hit rate and `host` lets the report keep only the app's vhosts, as an allowlist (`[source] hosts`), since the box's log can mix in other vhosts and junk hitting it by raw IP or spoofed Host. `host` is never persisted.
 
-A line in another format counts as a parse failure in the run record.
+**Metrics.** With `[metrics]`, a root timer runs `box/sample.py` (stdlib only, on the box's `python3`) every `interval_s`, appending one JSON line per scope to `box.METRICS_LOG`, rotated by a logrotate drop-in. Scopes: `host` (memory), each of `mounts` (disk), each unit whose cgroup directory matches a `units` glob. `used`/`limit` is each scope's fill (a unit's `memory.current` against `memory.max`, page cache included); a unit adds `anon` memory (where a leak shows), `fds` summed over its processes, `fd_limit` (the lowest soft limit among them) and `procs`. The report archives them in `metrics/` and renders the local site's box page.
+
+## Alerts
+
+Each caller steps its own incident table (`alert.py`, persisted under the store's `incidents/`): a failing check fires once it has failed for the caller's sustain time, passing again resolves it, and each step's events go out as one mail; a failed send fires again on the next step. The report run checks the latest box sample against `[alerts]` and fires at once. `ramore monitor` probes `[monitor] url` and a few same-site links from it every `PROBE_EVERY_S`, firing after `SUSTAIN_S`, and checks the age of the published report: each rendered site carries `SITE_STATE` with its last pull, stale after `REPORT_STALE_AFTER` (two missed runs). The monitor's requests carry the `MONITOR_PRODUCT` User-Agent, a bot UA family of its own in the report.
+
+`ramore units` installs a host's systemd user units: the report timer (every `REPORT_EVERY_H` hours, `Persistent=true`, under `REPORT_MEMORY_MAX`) and the monitor service (restarted at least daily). A failed or OOM-killed run shows in `systemctl --user --failed`; the alert for it is the monitor's freshness check.
 
 ## Routes
 
@@ -45,6 +46,7 @@ Under `store` (keep it out of git):
 - `archive/year_month=YYYY-MM/day=DD/`: hot, one row per request, within `COLD_AFTER_DAYS`.
 - `archive-cold/year=YYYY/month=M/`: older days merged per month, heavier zstd, without the free-text columns (`path`, `ua`, `referrer`).
 - `aggregates/{hourly,daily,sessions}/`: per-bucket counts and latency quantiles by route, status family, bot class and cache status; one row per session.
+- `metrics/year_month=YYYY-MM/`: the box samples, one row per scope and sample.
 - `site/` (raw values, local only), `site-public/` (anonymized, published), `logs/`, `state.json`, `salts.json`.
 
 Hot archive columns: `t`, `addr`, `method`, `path`, `route_template`, `status`, `size`, `referrer`, `ua`, `ua_family`, `bot_class`, `rt`, `uct`, `uht`, `urt`, `cs`, `session_id`, `referrer_domain`. `route_template`, `ua_family`, `bot_class` and `session_id` are written at archive time, so a change to the route table or the rules applies to new rows; `ramore report --reclassify-all` re-classifies the hot days (not their templates) and rebuilds the aggregates.
