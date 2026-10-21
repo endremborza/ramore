@@ -33,7 +33,7 @@ The first template that matches wins, in specificity order per segment: literal,
 
 ## Sessions and classification
 
-A session is one `(ip, ua)` pair split by a `SESSION_IDLE_MIN` idle gap; its id hashes the pair with the day's salt (`salts.json`, never published). Classification (`classify.py`) is rule-based: a hard bot rule (empty or known-bot UA, a bot-only route of `BOT_ONLY_ROUTES`, every request a HEAD) makes a session `bot_known`; otherwise soft rules add up a score (search use, a browser UA, SvelteKit data prefetches, a referrer, no API call at all) and the thresholds split it into `human_likely`, `unknown` and `bot_likely`. The classification page lists every rule with the share of sessions it fired on.
+A session is one `(ip, ua)` pair split by a `SESSION_IDLE_MIN` idle gap; its id hashes the pair with the day's salt (`salts.json`, never published). Classification (`classify.py`) is rule-based: a hard bot rule (empty or known-bot UA, a bot-only route of `BOT_ONLY_ROUTES`, every request a HEAD) makes a session `bot_known`; otherwise soft rules add up a score (search use, a browser UA, SvelteKit data prefetches, a referrer, no API call at all) and the thresholds split it into `human_likely`, `unknown` and `bot_likely`. Each rule is a bool column of the sessions table, next to `score`, so the classification page reads the share of sessions each rule fired on and the score distribution straight from them.
 
 ## Landing page
 

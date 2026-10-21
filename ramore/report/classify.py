@@ -1,24 +1,29 @@
 """Bot/human session classification.
 
-Public surface (also used by the explainer page):
-- `BotClass` constants and ordered classes.
-- `UA_FAMILIES`, `HARD_RULES`, `SOFT_RULES` — introspectable rule data.
+Each rule aggregates one session's requests to a bool, kept as a column of the sessions table: a
+hard rule makes the session `bot_known`; otherwise the soft rules' scores add up to `score`, which
+`SOFT_HUMAN_THRESHOLD` and `SOFT_BOT_THRESHOLD` split into `human_likely`, `unknown` and
+`bot_likely`. The classification page reads the rules (`HARD_RULES`, `SOFT_RULES`) and the UA
+families (`UA_FAMILIES`) to explain them.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
+from typing import Callable, Iterable
 from urllib.parse import urlsplit
 
 import polars as pl
 
 from .. import MONITOR_PRODUCT, config
 from . import routes
+from .parse import map_distinct
 
-# --- bot-class labels ----------------------------------------------------
+BOT_ONLY_ROUTES = ("/robots.txt", "/sitemap*.xml")
+SOFT_HUMAN_THRESHOLD = 3
+SOFT_BOT_THRESHOLD = 0
 
 
 class BotClass:
@@ -26,7 +31,6 @@ class BotClass:
     BOT_LIKELY = "bot_likely"
     UNKNOWN = "unknown"
     HUMAN_LIKELY = "human_likely"
-    HUMAN_KNOWN = "human_known"
 
 
 BOT_CLASS_ORDER: list[str] = [
@@ -34,21 +38,15 @@ BOT_CLASS_ORDER: list[str] = [
     BotClass.BOT_LIKELY,
     BotClass.UNKNOWN,
     BotClass.HUMAN_LIKELY,
-    BotClass.HUMAN_KNOWN,
 ]
-HUMAN_CLASSES: set[str] = {BotClass.HUMAN_KNOWN, BotClass.HUMAN_LIKELY}
-BOT_CLASSES: set[str] = {BotClass.BOT_KNOWN, BotClass.BOT_LIKELY}
+HUMAN_CLASSES: set[str] = {BotClass.HUMAN_LIKELY}
 
 BOT_CLASS_COLORS: dict[str, str] = {
     BotClass.BOT_KNOWN: "#f38ba8",
     BotClass.BOT_LIKELY: "#eba0ac",
     BotClass.UNKNOWN: "#9399b2",
     BotClass.HUMAN_LIKELY: "#94e2d5",
-    BotClass.HUMAN_KNOWN: "#a6e3a1",
 }
-
-
-# --- UA family bucketing -------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -94,13 +92,10 @@ UA_FAMILIES: list[UAFamily] = [
     UAFamily("opera", _rx(r"Opera|OPR/"), False),
 ]
 
-_UA_BROWSER_RE = re.compile(r"Chrome|Safari|Firefox|Edge|Opera|Vivaldi", re.IGNORECASE)
-
-# Combined patterns for vectorized Polars matching.
 _BOT_UA_RE = (
-    "(?i)(" + "|".join(fam.pattern.pattern for fam in UA_FAMILIES if fam.is_bot) + ")"
+    "(?i)(" + "|".join(f.pattern.pattern for f in UA_FAMILIES if f.is_bot) + ")"
 )
-_BROWSER_TOKEN_RE = "(?i)(?:" + _UA_BROWSER_RE.pattern + ")"
+_BROWSER_TOKEN_RE = "(?i)(?:Chrome|Safari|Firefox|Edge|Opera|Vivaldi)"
 
 
 def ua_family(ua: str) -> str:
@@ -112,21 +107,6 @@ def ua_family(ua: str) -> str:
     return "unknown"
 
 
-def is_bot_ua(ua: str) -> bool:
-    if not ua:
-        return False
-    return any(fam.is_bot and fam.pattern.search(ua) for fam in UA_FAMILIES)
-
-
-def is_browser_ua(ua: str) -> bool:
-    if not ua:
-        return False
-    return bool(_UA_BROWSER_RE.search(ua)) and "Mozilla" in ua
-
-
-# --- referrer ------------------------------------------------------------
-
-
 def referrer_domain(ref: str) -> str:
     if not ref or ref == "-":
         return ""
@@ -134,12 +114,7 @@ def referrer_domain(ref: str) -> str:
         host = urlsplit(ref).netloc.lower()
     except ValueError:
         return ""
-    return host[4:] if host.startswith("www.") else host
-
-
-# --- route categories ---------------------------------------------------
-
-BOT_ONLY_ROUTES = ("/robots.txt", "/sitemap*.xml")
+    return host.removeprefix("www.")
 
 
 def bot_routes() -> frozenset[str]:
@@ -151,113 +126,94 @@ def bot_routes() -> frozenset[str]:
     )
 
 
-def _is_search() -> pl.Expr:
+@dataclass(frozen=True)
+class Rule:
+    """A session signal: `expr()` aggregates one session's requests to a bool. A soft rule adds
+    `score`; a hard one (no score) makes the session `bot_known`."""
+
+    name: str
+    description: str
+    expr: Callable[[], pl.Expr]
+    score: int | None = None
+
+
+def _ua() -> pl.Expr:
+    return pl.col("ua").first().fill_null("")
+
+
+def _hits(templates: Iterable[str]) -> pl.Expr:
+    return pl.col("route_template").is_in(list(templates)).any()
+
+
+def _searched() -> pl.Expr:
     search = config.get().search
     if search is None:
         return pl.lit(False)
     query = rf"[?&]{re.escape(search.param)}=[^&]"
-    return (pl.col("route_template") == search.route) & pl.col("path").str.contains(
+    hit = (pl.col("route_template") == search.route) & pl.col("path").str.contains(
         query
     )
+    return hit.any()
 
 
-# --- rule data structures -----------------------------------------------
-
-
-@dataclass(frozen=True)
-class HardRule:
-    name: str
-    side: str  # "bot" or "human"
-    description: str
-    expr: pl.Expr
-
-
-@dataclass(frozen=True)
-class SoftRule:
-    name: str
-    score: int
-    description: str
-    expr: pl.Expr
-
-
-HARD_RULES: list[HardRule] = [
-    HardRule(
-        "empty_ua",
-        "bot",
-        "User-Agent header missing or empty.",
-        pl.col("_empty_ua"),  # empty_ua
-    ),
-    HardRule(
+HARD_RULES: list[Rule] = [
+    Rule("empty_ua", "User-Agent header missing or empty.", lambda: _ua() == ""),
+    Rule(
         "bot_ua",
-        "bot",
         "User-Agent matches a known bot/crawler/script family.",
-        pl.col("_is_bot_ua"),  # bot_ua
+        lambda: _ua().str.contains(_BOT_UA_RE),
     ),
-    HardRule(
+    Rule(
         "robots_or_sitemap",
-        "bot",
         f"Hit a bot-only route: {', '.join(BOT_ONLY_ROUTES)}.",
-        pl.col("_is_bot_route"),  # robots_or_sitemap
+        lambda: _hits(bot_routes()),
     ),
-    HardRule(
+    Rule(
         "all_HEAD",
-        "bot",
         "Every request in the session uses the HEAD method.",
-        pl.col("_all_head"),  # all_HEAD
+        lambda: (pl.col("method") == "HEAD").all(),
     ),
 ]
 
-SOFT_RULES: list[SoftRule] = [
-    SoftRule(
+SOFT_RULES: list[Rule] = [
+    Rule(
         "search_used",
-        +2,
         "Used the search route with a non-empty query parameter.",
-        pl.col("_is_search"),  # search_used
-    ),
-    SoftRule(
-        "browser_ua",
-        +1,
-        "User-Agent looks like a real browser (`Mozilla` + Chrome/Safari/Firefox/etc.).",
-        pl.col("_is_browser_ua"),  # browser_ua
-    ),
-    SoftRule(
-        "sveltekit_prefetch",
+        _searched,
         +2,
-        "Session contains SvelteKit __data.json requests, indicating browser hover-prefetch activity.",
-        pl.col("_has_data"),  # sveltekit_prefetch
     ),
-    SoftRule(
-        "referrer_present",
+    Rule(
+        "browser_ua",
+        "User-Agent looks like a real browser (`Mozilla` + Chrome/Safari/Firefox/etc.).",
+        lambda: (
+            _ua().str.contains("Mozilla", literal=True)
+            & _ua().str.contains(_BROWSER_TOKEN_RE)
+        ),
         +1,
+    ),
+    Rule(
+        "sveltekit_prefetch",
+        "Session contains SvelteKit __data.json requests, indicating browser hover-prefetch activity.",
+        lambda: _hits(routes.table().of_kind(routes.Kind.DATA)),
+        +2,
+    ),
+    Rule(
+        "referrer_present",
         "At least one request carries a non-empty Referer.",
-        pl.col("_has_referrer"),  # referrer_present
+        lambda: (pl.col("referrer").fill_null("") != "").any(),
+        +1,
     ),
-    SoftRule(
+    Rule(
         "www_no_api",
-        -2,
         "The session made no request to an API route.",
-        ~pl.col("_has_api"),  # www_no_api
+        lambda: ~_hits(routes.table().of_kind(routes.Kind.API)),
+        -2,
     ),
 ]
 
-SOFT_HUMAN_THRESHOLD = 3
-SOFT_BOT_THRESHOLD = 0
+RULES = HARD_RULES + SOFT_RULES
 
-# --- session classification (fully vectorized) ---------------------------
-
-_SESSION_OUT_COLS = [
-    "session_id",
-    "addr",
-    "ua",
-    "ua_family",
-    "start",
-    "end",
-    "n_req",
-    "bot_class",
-    "signals_json",
-]
-
-_SESSION_SCHEMA = {
+SESSION_SCHEMA = {
     "session_id": pl.String,
     "addr": pl.String,
     "ua": pl.String,
@@ -266,143 +222,46 @@ _SESSION_SCHEMA = {
     "end": pl.Datetime("us", "UTC"),
     "n_req": pl.Int64,
     "bot_class": pl.String,
-    "signals_json": pl.String,
+    "score": pl.Int32,
+    **{r.name: pl.Boolean for r in RULES},
 }
 
 
 def classify_sessions(df: pl.DataFrame) -> pl.DataFrame:
-    """One row per session_id with bot_class + signals_json."""
-    if df.is_empty():
-        return pl.DataFrame(schema=_SESSION_SCHEMA)
-
-    # Per-event boolean flags.
-    table = routes.table()
-    route = pl.col("route_template")
-    enriched = df.with_columns(
-        [
-            _is_search().alias("_is_search"),
-            route.is_in(list(table.of_kind(routes.Kind.DATA))).alias("_is_data"),
-            route.is_in(list(bot_routes())).alias("_is_bot_route"),
-            route.is_in(list(table.of_kind(routes.Kind.API))).alias("_is_api"),
-            pl.col("referrer").fill_null("").ne("").alias("_has_referrer"),
-        ]
+    """One row per session (`SESSION_SCHEMA`): its span and size, each rule, `score`, `bot_class`."""
+    sess = df.group_by("session_id").agg(
+        pl.col("addr").first(),
+        pl.col("ua").first(),
+        pl.col("t").min().alias("start"),
+        pl.col("t").max().alias("end"),
+        pl.len().cast(pl.Int64).alias("n_req"),
+        *(r.expr().alias(r.name) for r in RULES),
     )
-
-    # One group_by pass for all session-level aggregates.
-    sess = enriched.group_by("session_id").agg(
-        [
-            pl.col("ua").first(),
-            pl.col("addr").first(),
-            pl.col("t").min().alias("start"),
-            pl.col("t").max().alias("end"),
-            pl.len().cast(pl.Int64).alias("n_req"),
-            pl.col("method").eq("HEAD").all().alias("_all_head"),
-            pl.col("_is_bot_route").any(),
-            pl.col("_is_search").any(),
-            pl.col("_is_data").any().alias("_has_data"),
-            pl.col("_has_referrer").any(),
-            pl.col("_is_api").any().alias("_has_api"),
-        ]
-    )
-
-    # Session-level UA flags (vectorized regex, one per session).
-    ua = pl.col("ua").fill_null("")
-    sess = sess.with_columns(
-        [
-            ua.eq("").alias("_empty_ua"),
-            ua.str.contains(_BOT_UA_RE).alias("_is_bot_ua"),
-            (
-                ua.str.contains("Mozilla", literal=True)
-                & ua.str.contains(_BROWSER_TOKEN_RE)
-            ).alias("_is_browser_ua"),
-            ua.map_elements(ua_family, return_dtype=pl.String).alias("ua_family"),
-        ]
-    )
-
-    # Named boolean columns for each rule (drives score, bot_class, and signals).
-    sess = sess.with_columns(
-        [rule.expr.alias(rule.name) for rule in HARD_RULES]
-        + [rule.expr.alias(rule.name) for rule in SOFT_RULES]
-    )
-
-    # Score and bot_class.
     score = pl.sum_horizontal(
-        [pl.when(pl.col(r.name)).then(r.score).otherwise(0) for r in SOFT_RULES]
-    )
-    _bot_cols = [pl.col(r.name) for r in HARD_RULES if r.side == "bot"]
-    hard_bot = pl.any_horizontal(_bot_cols) if _bot_cols else pl.lit(False)
+        pl.when(pl.col(r.name)).then(r.score).otherwise(0) for r in SOFT_RULES
+    ).cast(pl.Int32)
     bot_class = (
-        pl.when(hard_bot)
+        pl.when(pl.any_horizontal(r.name for r in HARD_RULES))
         .then(pl.lit(BotClass.BOT_KNOWN))
-        .when(score >= SOFT_HUMAN_THRESHOLD)
+        .when(pl.col("score") >= SOFT_HUMAN_THRESHOLD)
         .then(pl.lit(BotClass.HUMAN_LIKELY))
-        .when(score <= SOFT_BOT_THRESHOLD)
+        .when(pl.col("score") <= SOFT_BOT_THRESHOLD)
         .then(pl.lit(BotClass.BOT_LIKELY))
         .otherwise(pl.lit(BotClass.UNKNOWN))
     )
-    sess = sess.with_columns([bot_class.alias("bot_class"), score.alias("_score")])
-
-    # signals_json: lightweight per-session dict lookup from pre-computed booleans.
-    _rule_names = [r.name for r in HARD_RULES + SOFT_RULES]
-    sess = sess.with_columns(
-        pl.struct(_rule_names + ["_score"])
-        .map_elements(_signals_from_struct, return_dtype=pl.String)
-        .alias("signals_json")
+    return (
+        map_distinct(sess, "ua", ua_family, "ua_family")
+        .with_columns(score.alias("score"))
+        .with_columns(bot_class.alias("bot_class"))
+        .select(pl.col(c).cast(t) for c, t in SESSION_SCHEMA.items())
     )
-
-    return sess.select(_SESSION_OUT_COLS)
-
-
-def _signals_from_struct(s: dict) -> str:
-    sigs = []
-    for rule in HARD_RULES:
-        if s[rule.name]:
-            sigs.append(f"hard:{rule.name}")
-    for rule in SOFT_RULES:
-        if s[rule.name]:
-            sigs.append(f"soft:{'+' if rule.score > 0 else ''}{rule.score} {rule.name}")
-    sigs.append(f"soft:score={s['_score']}")
-    return json.dumps(sigs)
 
 
 def annotate_events(df: pl.DataFrame, sessions: pl.DataFrame) -> pl.DataFrame:
-    """Add ua_family, bot_class, referrer_domain to event rows."""
-    if df.is_empty():
-        return df.with_columns(
-            [
-                pl.lit(None).cast(pl.String).alias("ua_family"),
-                pl.lit(None).cast(pl.String).alias("bot_class"),
-                pl.lit(None).cast(pl.String).alias("referrer_domain"),
-            ]
-        )
-
-    clean = df.drop(
-        [c for c in ["ua_family", "bot_class", "referrer_domain"] if c in df.columns]
-    )
-
-    # Compute per-unique-value lookups to avoid per-row Python calls.
-    ua_lookup = (
-        clean.select("ua")
-        .unique()
-        .with_columns(
-            pl.col("ua")
-            .map_elements(ua_family, return_dtype=pl.String)
-            .alias("ua_family")
-        )
-    )
-    ref_lookup = (
-        clean.select("referrer")
-        .unique()
-        .with_columns(
-            pl.col("referrer")
-            .map_elements(referrer_domain, return_dtype=pl.String)
-            .alias("referrer_domain")
-        )
-    )
-
-    return (
-        clean.join(ua_lookup, on="ua", how="left")
-        .join(ref_lookup, on="referrer", how="left")
-        .join(sessions.select(["session_id", "bot_class"]), on="session_id", how="left")
-        .with_columns(pl.col("bot_class").fill_null(BotClass.UNKNOWN))
-    )
+    """`df` with each request's `ua_family`, `referrer_domain` and its session's `bot_class`."""
+    df = df.drop("ua_family", "referrer_domain", "bot_class", strict=False)
+    df = map_distinct(df, "ua", ua_family, "ua_family")
+    df = map_distinct(df, "referrer", referrer_domain, "referrer_domain")
+    return df.join(
+        sessions.select("session_id", "bot_class"), on="session_id", how="left"
+    ).with_columns(pl.col("bot_class").fill_null(BotClass.UNKNOWN))
