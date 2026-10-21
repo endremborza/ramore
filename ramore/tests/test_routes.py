@@ -4,10 +4,9 @@ from pathlib import Path
 import pytest
 
 from ramore import config
+from ramore.demo import API_ROUTES
 from ramore.report import routes
 from ramore.report.routes import UNKNOWN, Kind
-
-from .conftest import API_ROUTES
 
 
 @pytest.mark.parametrize(

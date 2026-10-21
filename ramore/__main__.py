@@ -8,6 +8,7 @@ def main() -> None:
             "report": "ramore.report.run",
             "reset": "ramore.report.reset",
             "box": "ramore.box",
+            "demo": "ramore.demo",
             "monitor": "ramore.monitor",
             "units": "ramore.units",
         },

@@ -1,22 +1,26 @@
 import dataclasses
 import json
-import os
 import re
 import subprocess
 from pathlib import Path
 
 import pytest
 
-from ramore import box, config
+from ramore import box, config, ssh
 from ramore.report.parse import parse_lines
 
-METRICS = config.Metrics(60, ("/",), ("app-*.service",))
-BOX_ROOTS = ("/etc/", "/usr/local/", "/var/log/")
+from .conftest import FakeBox
 
 
 def _nginx_json(value: str) -> str:
     """A value as nginx's `escape=json` writes it."""
     return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _install(cfg: config.Config) -> None:
+    ssh.run(
+        cfg.ssh_host, "sudo -n bash -s", box.install_script(box.files(cfg)).encode()
+    )
 
 
 def test_log_format_parses():
@@ -47,95 +51,62 @@ def test_log_format_parses():
 
 
 def test_files_follow_metrics(cfg: config.Config):
-    assert set(box.files(cfg)) == {box.NGINX_CONF}
-    with_metrics = box.files(dataclasses.replace(cfg, metrics=METRICS))
+    assert cfg.metrics is not None
+    with_metrics = box.files(cfg)
     assert (
         with_metrics[box.SAMPLER]
         == Path(box.__file__).with_name("sample.py").read_text()
     )
-    assert json.loads(with_metrics[box.SAMPLER_CONF])["units"] == list(METRICS.units)
-    assert (
-        f"OnUnitActiveSec={METRICS.interval_s}s"
-        in with_metrics[f"{box.UNIT_DIR}/{box.SAMPLER_UNIT}.timer"]
+    assert json.loads(with_metrics[box.SAMPLER_CONF])["units"] == list(
+        cfg.metrics.units
     )
+    timer = with_metrics[f"{box.UNIT_DIR}/{box.SAMPLER_UNIT}.timer"]
+    assert f"OnUnitActiveSec={cfg.metrics.interval_s}s" in timer
+    assert set(box.files(dataclasses.replace(cfg, metrics=None))) == {box.NGINX_CONF}
 
 
 def test_stamp_tracks_config(cfg: config.Config):
-    a = box.stamp(box.files(dataclasses.replace(cfg, metrics=METRICS)))
-    b = box.stamp(
-        box.files(
-            dataclasses.replace(
-                cfg, metrics=dataclasses.replace(METRICS, interval_s=30)
-            )
-        )
-    )
-    assert a == box.stamp(box.files(dataclasses.replace(cfg, metrics=METRICS)))
-    assert a != b != box.stamp(box.files(cfg))
+    assert cfg.metrics is not None
+    slower = dataclasses.replace(cfg.metrics, interval_s=cfg.metrics.interval_s * 2)
+    a = box.stamp(box.files(cfg))
+    b = box.stamp(box.files(dataclasses.replace(cfg, metrics=slower)))
+    assert a == box.stamp(box.files(cfg))
+    assert a != b != box.stamp(box.files(dataclasses.replace(cfg, metrics=None)))
 
 
-@pytest.fixture
-def fake_box(tmp_path: Path) -> tuple[Path, Path, dict]:
-    """A root to install into, and `nginx`/`systemctl` stubs logging their calls."""
-    root, bin_dir, calls = tmp_path / "box", tmp_path / "bin", tmp_path / "calls"
-    bin_dir.mkdir()
-    for name in ("nginx", "systemctl"):
-        stub = bin_dir / name
-        stub.write_text(
-            f'#!/bin/sh\necho "{name} $*" >> {calls}\n'
-            f'[ "{name} $*" != "nginx -t" ] || exit "${{NGINX_T_EXIT:-0}}"\n'
-        )
-        stub.chmod(0o755)
-    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
-    return root, calls, env
+def test_ensure_installs_once(cfg: config.Config, fake_box: FakeBox):
+    assert not box.is_current(cfg)
+    assert box.ensure(cfg)
+    for path, content in box.files(cfg).items():
+        assert fake_box.path(path).read_text() == content
+    assert box.is_current(cfg) and not box.ensure(cfg)
+    calls = fake_box.calls.read_text()
+    assert "systemctl reload nginx" in calls
+    assert f"systemctl enable {box.SAMPLER_UNIT}.timer" in calls
 
 
-def _run(script: str, root: Path, env: dict) -> subprocess.CompletedProcess:
-    for prefix in BOX_ROOTS:
-        script = script.replace(prefix, f"{root}{prefix}")
-    return subprocess.run(
-        ["bash", "-s"], input=script.encode(), env=env, capture_output=True
-    )
-
-
-def _on_box(root: Path, path: str) -> Path:
-    return root / path.lstrip("/")
-
-
-def test_install_script_writes_the_box(cfg: config.Config, fake_box):
-    root, calls, env = fake_box
-    files = box.files(dataclasses.replace(cfg, metrics=METRICS))
-    assert _run(box.install_script(files), root, env).returncode == 0
-    for path, content in files.items():
-        assert _on_box(root, path).read_text() == content
-    assert _on_box(root, box.STAMP).read_text().strip() == box.stamp(files)
-    log = calls.read_text()
-    assert "systemctl reload nginx" in log
-    assert f"systemctl enable {box.SAMPLER_UNIT}.timer" in log
-
-
-def test_install_script_restores_nginx_conf_on_failed_test(
-    cfg: config.Config, fake_box
+def test_install_restores_nginx_conf_on_failed_test(
+    cfg: config.Config, fake_box: FakeBox, monkeypatch: pytest.MonkeyPatch
 ):
-    root, _, env = fake_box
-    conf = _on_box(root, box.NGINX_CONF)
+    conf = fake_box.path(box.NGINX_CONF)
     conf.parent.mkdir(parents=True)
     conf.write_text("previous\n")
-    run = _run(box.install_script(box.files(cfg)), root, {**env, "NGINX_T_EXIT": "1"})
-    assert run.returncode != 0
+    monkeypatch.setenv("NGINX_T_EXIT", "1")
+    with pytest.raises(subprocess.CalledProcessError):
+        _install(cfg)
     assert conf.read_text() == "previous\n"
-    assert not _on_box(root, box.STAMP).exists()
+    assert not fake_box.path(box.STAMP).exists()
 
 
-def test_install_script_removes_the_sampler_without_metrics(
-    cfg: config.Config, fake_box
+def test_install_removes_the_sampler_without_metrics(
+    cfg: config.Config, fake_box: FakeBox
 ):
-    root, calls, env = fake_box
-    _run(
-        box.install_script(box.files(dataclasses.replace(cfg, metrics=METRICS))),
-        root,
-        env,
+    _install(cfg)
+    bare = dataclasses.replace(cfg, metrics=None)
+    _install(bare)
+    assert not fake_box.path(box.SAMPLER).exists()
+    assert (
+        f"systemctl disable --now {box.SAMPLER_UNIT}.timer"
+        in fake_box.calls.read_text()
     )
-    assert _run(box.install_script(box.files(cfg)), root, env).returncode == 0
-    assert not _on_box(root, box.SAMPLER).exists()
-    assert f"systemctl disable --now {box.SAMPLER_UNIT}.timer" in calls.read_text()
-    assert _on_box(root, box.STAMP).read_text().strip() == box.stamp(box.files(cfg))
+    assert box.is_current(bare)

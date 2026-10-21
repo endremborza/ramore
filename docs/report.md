@@ -44,21 +44,27 @@ KPIs per window (requests, sessions, 5xx rate, p99 upstream time, cache hit rate
 Under `store` (keep it out of git):
 
 - `archive/year_month=YYYY-MM/day=DD/`: hot, one row per request, within `COLD_AFTER_DAYS`.
-- `archive-cold/year=YYYY/month=M/`: older days merged per month, heavier zstd, without the free-text columns (`path`, `ua`, `referrer`).
-- `aggregates/{hourly,daily,sessions}/`: per-bucket counts and latency quantiles by route, status family, bot class and cache status; one row per session.
+- `archive-cold/year=YYYY/month=M/`: older days merged per month, heavier zstd, without `archive.FREE_TEXT_COLUMNS`.
+- `aggregates/{hourly,daily,sessions}/`: per-bucket counts and latency quantiles by route, status family, bot class and cache status (`aggregate.LEVELS`); one row per session (`classify.SESSION_SCHEMA`).
 - `metrics/year_month=YYYY-MM/`: the box samples, one row per scope and sample.
 - `site/` (raw values, local only), `site-public/` (anonymized, published), `logs/`, `state.json`, `salts.json`.
 
-Hot archive columns: `t`, `addr`, `method`, `path`, `route_template`, `status`, `size`, `referrer`, `ua`, `ua_family`, `bot_class`, `rt`, `uct`, `uht`, `urt`, `cs`, `session_id`, `referrer_domain`. `route_template`, `ua_family`, `bot_class` and `session_id` are written at archive time, so a change to the route table or the rules applies to new rows; `ramore report --reclassify-all` re-classifies the hot days (not their templates) and rebuilds the aggregates.
+The hot archive's columns are `archive.HOT_COLUMNS`. `route_template`, `ua_family`, `bot_class` and `session_id` are written at archive time, so a change to the route table or the rules applies to new rows; `ramore report --reclassify-all` re-classifies the hot days (not their templates) and rebuilds the aggregates.
 
 ## Anonymization
 
-The public site carries no IP and no raw UA: UAs become a family and a bot class, referrers their registered domain, session addresses a day-salted hash cut to `IP_HASH_LEN`.
+The public site carries no IP and no raw UA: the render reads neither (`render/base.EVENT_RENDER_COLS`, `SESSION_RENDER_COLS`), so UAs show as a family and a bot class, referrers as their registered domain. Every template autoescapes, so a request path someone sent (the runs pages list unmatched ones) cannot inject markup.
 
 ## Publish
 
-`publish.py` checks the pages branch out into the `[publish] worktree`, replaces its content with `site-public/` and pushes. The first run creates the orphan branch when the remote has none. One-time GitHub setup: Settings → Pages → source = the branch, root; a custom domain via a `CNAME` file.
+`publish.py` commits `site-public/` onto the pages branch with git plumbing in the app's repo, without checking anything out: it fetches the branch's remote head, stages the site into a temporary index, carries `publish.CARRIED` (`CNAME`) over from the head, writes the tree and pushes a commit of it on top of the head; an unchanged tree pushes nothing, and a remote without the branch gets a root commit. One-time GitHub setup: Settings → Pages → source = the branch, root; a custom domain set there writes the `CNAME` that every publish keeps.
 
 ## Reset
 
-`ramore reset` wipes the store and force-pushes an empty pages branch (keeping `CNAME`); `--local-only` keeps the published site. Run it before pointing the report at a new box, so nothing from the old one lingers: the next run then starts from the new log's tail, as a first run.
+`ramore reset` wipes the store and force-pushes a pages branch of one commit holding only `publish.CARRIED`; `--local-only` keeps the published site. Run it before pointing the report at a new box, so nothing from the old one lingers: the next run then starts from the new log's tail, as a first run.
+
+## Demo
+
+`ramore demo` (`demo.py`) writes an example app (a `ramore.toml`, an API route list, a SvelteKit route tree) and generates `DEMO_DAYS` of its traffic and box samples in the box's two log formats: human visits with pages, prefetches, API calls, searches, logins and referrers; crawlers, link-preview bots, scripts, scanners (some by raw IP), an uptime checker, ramore's monitor, a few torn lines and one 5xx incident. It runs them through the report's ingest, aggregation and render into a fresh store and prints the local site's path; `--visitors` scales the traffic. The repo's Pages site is this demo, deployed by `.github/workflows/demo.yml`.
+
+The tests load the same app. `test_e2e.py` serves the demo's logs from a fake box (`conftest.fake_box`: an `ssh` on PATH that runs each command under a temporary root, with `nginx` and `systemctl` stubs) and drives `report`, `units` and `reset` through the CLI against a bare git remote.

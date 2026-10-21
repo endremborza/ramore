@@ -5,79 +5,26 @@ import re
 
 import polars as pl
 
-from ramore import SITE_STATE, config
-from ramore.report import aggregate, archive, metrics
-from ramore.report.archive import annotate_routes
-from ramore.report.classify import annotate_events, classify_sessions
-from ramore.report.parse import parse_lines
-from ramore.report.render import render_all
-from ramore.report.render.landing import _card, _kpi_block
-from ramore.report.sessions import assign_sessions
+from ramore import SITE_STATE, config, demo
+from ramore.demo import LOGIN
+from ramore.report import aggregate, metrics, run, state
+from ramore.report.render import PAGES, render_all
+from ramore.report.render.landing import Card, kpis
 
-from .conftest import LOGIN
-from .fixtures import ALL
+IP = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
+SCRIPT_PATH = "/<script>alert(1)</script>"
 
 
 def _populate() -> None:
-    df, _ = parse_lines(ALL)
-    now_utc = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
-    base = now_utc.replace(minute=0, second=0) - dt.timedelta(hours=1)
-    new_ts = [base + dt.timedelta(seconds=i) for i in range(len(df))]
-    df = df.with_columns(pl.Series("t", new_ts, dtype=pl.Datetime("us", "UTC")))
-    df = annotate_routes(df)
-    df = assign_sessions(df)
-    sessions = classify_sessions(df)
-    aggregate.write_sessions(sessions)
-    df = annotate_events(df, sessions)
-    archive.write_events(df)
+    """The last day of the demo's traffic and box, with a scanner's script tag for a path."""
+    end = dt.datetime.now(dt.timezone.utc)
+    start = end - dt.timedelta(days=1)
+    lines = demo.traffic(start, end, visitors=20)
+    lines.append(json.dumps({**json.loads(lines[-1]), "path": SCRIPT_PATH}))
+    with run.run_record() as rec:
+        run.ingest(lines, state.load(), rec)
+    metrics.write(metrics.parse_lines(demo.samples(start, end))[0])
     aggregate.rebuild()
-
-
-def test_render_local_mode():
-    _populate()
-    ctx = render_all("local")
-    assert (ctx.out_dir / "index.html").exists()
-    assert (ctx.out_dir / "traffic.html").exists()
-    assert (ctx.out_dir / "performance.html").exists()
-    assert (ctx.out_dir / "errors.html").exists()
-    assert (ctx.out_dir / "sessions" / "index.html").exists()
-    assert (ctx.out_dir / "classification.html").exists()
-    assert (ctx.out_dir / "runs" / "index.html").exists()
-    assert (ctx.out_dir / "assets" / "style.css").exists()
-    landing = (ctx.out_dir / "index.html").read_text()
-    assert "<title>" in landing
-    site_state = json.loads((ctx.out_dir / SITE_STATE).read_text())
-    assert set(site_state) == {"last_run", "last_event_ts"}
-
-
-def test_box_page_is_local_only():
-    config.use(
-        dataclasses.replace(
-            config.get(), metrics=config.Metrics(60, ("/",), ("app.service",))
-        )
-    )
-    _populate()
-    t = dt.datetime.now(dt.timezone.utc).timestamp()
-    lines = [
-        json.dumps({"t": t, "scope": "host", "name": "", "used": 6, "limit": 10}),
-        json.dumps(
-            {
-                "t": t,
-                "scope": "unit",
-                "name": "app.service",
-                "used": 5,
-                "anon": 3,
-                "fds": 9,
-            }
-        ),
-    ]
-    metrics.write(metrics.parse_lines(lines)[0])
-    local = render_all("local").out_dir
-    assert "app.service" in (local / "box.html").read_text()
-    assert 'href="box.html"' in (local / "index.html").read_text()
-    public = render_all("public").out_dir
-    assert not (public / "box.html").exists()
-    assert 'href="box.html"' not in (public / "index.html").read_text()
 
 
 def _write_failed_run(ts: str, ip: str) -> None:
@@ -87,30 +34,56 @@ def _write_failed_run(ts: str, ip: str) -> None:
         "error": f"InvalidOperationError('... {ip} - - [05/Jul/2026:01:51:14 ...')",
         "trace": f'File ".../parse.py", line 35\n... {ip} ...',
     }
-    log = config.get().run_logs_dir / "run-2026-07-05.log"
-    log.write_text(json.dumps(rec, default=str) + "\n")
+    (config.get().run_logs_dir / "run-2026-07-05.log").write_text(
+        json.dumps(rec) + "\n"
+    )
 
 
-def test_render_public_mode_anonymizes():
+def test_render_local_mode():
     _populate()
-    # A prior run that failed on a torn line, echoing a raw IP into its error
-    # text — the exact leak that surfaced on the public site.
+    ctx = render_all("local")
+    for page in ("index", "traffic", "performance", "errors", "classification", "box"):
+        assert "<title>" in (ctx.out_dir / f"{page}.html").read_text()
+    for page in ("sessions/index", "runs/index"):
+        assert (ctx.out_dir / f"{page}.html").exists()
+    assert (ctx.out_dir / "assets" / "style.css").exists()
+    assert set(json.loads((ctx.out_dir / SITE_STATE).read_text())) == {
+        "last_run",
+        "last_event_ts",
+    }
+
+
+def test_box_page_is_local_only():
+    _populate()
+    local = render_all("local").out_dir
+    assert demo.UNITS[0] in (local / "box.html").read_text()
+    assert 'href="box.html"' in (local / "index.html").read_text()
+    public = render_all("public").out_dir
+    assert not (public / "box.html").exists()
+    assert 'href="box.html"' not in (public / "index.html").read_text()
+    config.use(dataclasses.replace(config.get(), metrics=None))
+    assert (
+        'href="box.html"'
+        not in (render_all("local").out_dir / "index.html").read_text()
+    )
+
+
+def test_public_site_has_no_address_and_escapes_paths():
+    _populate()
     _write_failed_run("2026-07-05T02-10-01", "162.158.162.77")
     ctx = render_all("public")
-    ip_re = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
     for f in ctx.out_dir.rglob("*.html"):
         text = f.read_text()
-        assert not ip_re.search(text), (
-            f"raw IP leaked in {f}: {ip_re.search(text).group(0)}"
-        )
+        assert not IP.search(text), f"address in {f}"
+        assert "<script>alert" not in text, f"unescaped path in {f}"
+    assert len(PAGES) <= len(list(ctx.out_dir.rglob("*.html")))
 
 
-def test_render_local_keeps_run_errors():
+def test_local_site_keeps_run_errors():
     _populate()
     _write_failed_run("2026-07-05T02-10-01", "162.158.162.77")
-    ctx = render_all("local")
-    detail = (ctx.out_dir / "runs" / "2026-07-05T02-10-01.html").read_text()
-    assert "162.158.162.77" in detail  # full detail retained locally
+    detail = render_all("local").out_dir / "runs" / "2026-07-05T02-10-01.html"
+    assert "162.158.162.77" in detail.read_text()
 
 
 def _kpi_events(rows: list[tuple[str, int]], t: dt.datetime) -> pl.DataFrame:
@@ -125,7 +98,7 @@ def _kpi_events(rows: list[tuple[str, int]], t: dt.datetime) -> pl.DataFrame:
     )
 
 
-def test_kpi_block_counts_callback_outcomes():
+def test_kpis_count_login_outcomes():
     rows = [
         (LOGIN.route, LOGIN.ok_status),
         (LOGIN.route, LOGIN.ok_status),
@@ -133,12 +106,11 @@ def test_kpi_block_counts_callback_outcomes():
         (LOGIN.route, 308),
         ("/about", LOGIN.ok_status),
     ]
-    events = _kpi_events(rows, dt.datetime.now(dt.timezone.utc))
-    html = _kpi_block("1h", events, pl.DataFrame(), 1)["html"]
-    assert _card(LOGIN.label, "2", "1 failed") in html
+    k = kpis(_kpi_events(rows, dt.datetime.now(dt.timezone.utc)), pl.DataFrame(), 1)
+    assert Card(LOGIN.label, "2", "1 failed") in k.cards
 
 
-def test_kpi_block_counts_sessions_active_in_window():
+def test_kpis_count_sessions_active_in_window():
     now = dt.datetime.now(dt.timezone.utc)
     events = _kpi_events([("/", 200)], now)
     sessions = pl.DataFrame(
@@ -147,5 +119,7 @@ def test_kpi_block_counts_sessions_active_in_window():
             "bot_class": ["human_likely", "bot_likely", "bot_likely"],
         }
     )
-    assert _card("Sessions", "2") in _kpi_block("1h", events, sessions, 1)["html"]
-    assert _card("Sessions", "3") in _kpi_block("24h", events, sessions, 24)["html"]
+    assert Card("Sessions", "2") in kpis(events, sessions, 1).cards
+    day = kpis(events, sessions, 24)
+    assert Card("Sessions", "3") in day.cards
+    assert {s.cls: s.n for s in day.classes} == {"bot_likely": 2, "human_likely": 1}

@@ -5,11 +5,12 @@ ramore monitoring and reporting: `ramore report` turns a site's nginx request lo
 ## Where to look
 
 - `ramore/config.py` — the app's `ramore.toml` as a frozen `Config`; commands `config.use(config.load())` once and every module reads `config.get()`, never a module-level path.
-- `ramore/__main__.py` — the protocli dispatcher: `report` → `ramore/report/run.py`, `reset` → `ramore/report/reset.py`, `box` → `ramore/box/__init__.py`, `monitor`, `units`.
+- `ramore/__main__.py` — the protocli dispatcher: `report` → `ramore/report/run.py`, `reset` → `ramore/report/reset.py`, `box` → `ramore/box/__init__.py`, `monitor`, `units`, `demo`.
 - `ramore/monitor.py` (the outside probe), `ramore/alert.py` (incident tables and their mail), `ramore/units.py` (a host's systemd user units).
 - `ramore/box/` — what ramore installs on the app's box: the request log format, the sampler (`sample.py`, copied to the box as is), the install script and its stamp. `ramore/ssh.py` runs commands there.
-- `ramore/report/` — `pull` (ssh, byte offsets per log) → `parse` (requests) / `metrics` → `routes` (the template table from the app's API list and SvelteKit tree) → `sessions` → `classify` → `archive` (shackleton hot/cold) → `aggregate` → `render/` (one module per page, jinja2 `templates/`) → `publish` (pages-branch worktree).
-- `ramore/tests/` — pytest; `conftest.py` loads a throwaway app config into every test.
+- `ramore/report/` — `run` (`fetch` over ssh, then `ingest`, which the demo shares): `pull` (byte offsets per log) → `parse` (requests) / `metrics` → `routes` (the template table from the app's API list and SvelteKit tree) → `sessions` → `classify` (each rule a sessions-table column) → `archive` (shackleton hot/cold) → `aggregate` → `render/` (one module per page, jinja2 `templates/`, autoescaped) → `publish` (git plumbing onto the pages branch, no checkout).
+- `ramore/demo.py` — the example app and its synthetic traffic and box samples, in the box's log formats; `ramore demo` renders them, the tests load the same app.
+- `ramore/tests/` — pytest; `conftest.py` loads the demo app into every test and `fake_box` serves a box from a temp dir (an `ssh` shim on PATH); `test_e2e.py` drives the CLI against it and a bare git remote.
 
 ## Rules
 

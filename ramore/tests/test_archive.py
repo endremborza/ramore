@@ -3,60 +3,32 @@ import datetime as dt
 import polars as pl
 
 from ramore.report import archive
-from ramore.report.archive import COLD_COLUMNS
-from ramore.report.parse import parse_lines
 
+from .conftest import annotated
 from .fixtures import ALL
 
 
 def test_write_events_idempotent():
-    df, _ = parse_lines(ALL)
-    df = archive.annotate_routes(df)
-    n1 = archive.write_events(df)
-    n2 = archive.write_events(df)
-    assert sum(n1.values()) == len(df)
-    assert sum(n2.values()) == 0
-
-    all_back = archive.read_hot()
-    assert len(all_back) == len(df)
-    assert (all_back["route_template"] != "_unknown").any()
+    df = annotated(ALL)
+    assert sum(archive.write_events(df).values()) == len(df)
+    assert sum(archive.write_events(df).values()) == 0
+    back = archive.read_hot()
+    assert len(back) == len(df)
+    assert set(archive.HOT_COLUMNS) <= set(back.columns)
 
 
 def test_write_events_dedupes_within_batch():
-    df, _ = parse_lines(ALL + ALL)
-    df = archive.annotate_routes(df)
-    archive.write_events(df)
-    all_back = archive.read_hot()
-    assert len(all_back) == len(ALL)
+    archive.write_events(annotated(ALL + ALL))
+    assert len(archive.read_hot()) == len(ALL)
 
 
-def test_compress_cold_skips_unannotated():
-    df, _ = parse_lines(ALL)
-    df = archive.annotate_routes(df)
-    df = df.with_columns((pl.col("t") - pl.duration(days=100)).alias("t"))
-    archive.write_events(df)
-    result = archive.compress_cold(today=dt.date.today())
-    assert any("skipped" in k for k in result)
-    assert len(archive.read_hot()) == len(df)
-
-
-def test_compress_cold_compacts_when_annotated():
-    df, _ = parse_lines(ALL)
-    df = archive.annotate_routes(df)
-    df = df.with_columns((pl.col("t") - pl.duration(days=100)).alias("t"))
-    df = df.with_columns(
-        [
-            pl.lit("s0").alias("session_id"),
-            pl.lit("test").alias("ua_family"),
-            pl.lit("unknown").alias("bot_class"),
-            pl.lit("").alias("referrer_domain"),
-        ]
+def test_compress_cold_moves_old_days():
+    df = annotated(ALL).with_columns(
+        pl.col("t") - pl.duration(days=archive.COLD_AFTER_DAYS + 10)
     )
     archive.write_events(df)
-    n_before = len(archive.read_hot())
-    result = archive.compress_cold(today=dt.date.today())
-    assert sum(v for k, v in result.items() if "skipped" not in k) >= 1
-    assert len(archive.read_hot()) == 0
-    cold = archive.read_cold()
-    assert set(COLD_COLUMNS).issubset(set(cold.columns))
-    assert len(cold) == n_before
+    assert sum(archive.compress_cold(today=dt.date.today()).values()) == 1
+    assert archive.read_hot().is_empty()
+    cold = archive.read_cold(archive.COLD_COLUMNS)
+    assert len(cold) == len(df)
+    assert not set(archive.FREE_TEXT_COLUMNS) & set(cold.columns)

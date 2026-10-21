@@ -4,6 +4,8 @@
 
 ramore monitoring and reporting. ramore installs its own side on the box serving a site (an nginx request log in its JSON format, and optionally a sampler of the box's memory, disks and units). `ramore report` pulls both logs over ssh, archives every request in a partitioned parquet store, sorts sessions into bots and humans, and publishes an anonymized static report site to the app repo's GitHub Pages branch. Extracted from the reporting pipeline of [rankless](https://github.com/endremborza/rankless).
 
+[The demo report](https://endremborza.github.io/ramore/) renders an example site's synthetic traffic; `uvx ramore demo` builds the same locally.
+
 ## Install
 
 ```bash
@@ -23,6 +25,7 @@ ramore box --check                     # current or outdated, exit 1 when outdat
 ramore monitor                         # probe the site, mail incidents (--once: print one round)
 ramore units --report --monitor        # this host's systemd user units (--remove to drop them)
 ramore reset                           # wipe the store and the published history
+ramore demo --out ramore-demo          # an example app and its synthetic traffic, rendered
 ```
 
 Mail goes through SMTP over SSL with `RAMORE_SMTP_HOST`, `RAMORE_SMTP_USER` and `RAMORE_SMTP_PASSWORD` from the environment, to `RAMORE_MAIL_TO` (default: the user). The units read them from `~/.config/environment.d/`.
