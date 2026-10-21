@@ -1,0 +1,136 @@
+{% extends "_base.html.j2" %}
+{% set depth = 0 %}
+{% block title %}Classification rules{% endblock %}
+{% block content %}
+<h1>How sessions get classified</h1>
+<p class="hint">
+  A session is a stream of requests from the same IP+UA, split when idle for &gt;30
+  minutes. Each session is bucketed into one of the five classes below using the
+  rules on this page. Hard rules fire deterministically; soft rules contribute to
+  a score that is thresholded at &plusmn;{{ soft_human_threshold }}.
+</p>
+
+<section>
+<h2>Classes</h2>
+<ul class="classes">
+{% for cls, color in bot_classes %}
+  <li class="cls-{{ cls }}">
+    <span class="dot" style="background:{{ color }}"></span>
+    <code>{{ cls }}</code>
+  </li>
+{% endfor %}
+</ul>
+</section>
+
+<section>
+<h2>User-Agent families</h2>
+<p class="hint">
+  The first matching pattern wins. Empty UA &rarr; <code>empty</code>; no match
+  &rarr; <code>unknown</code>. Bot-side families are flagged on the
+  <code>bot_ua</code> hard rule.
+</p>
+<table class="rule-table">
+  <thead><tr><th>Name</th><th>Pattern</th><th>Side</th></tr></thead>
+  <tbody>
+  {% for fam in ua_families %}
+    <tr class="ua-{{ fam.side }}">
+      <td><code>{{ fam.name }}</code></td>
+      <td><code>{{ fam.pattern }}</code></td>
+      <td>{{ fam.side }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</section>
+
+<section>
+<h2>Route categories</h2>
+{% if search %}
+<p class="hint">
+  Search route: <code>{{ search.route }}</code> (must carry a non-empty
+  <code>{{ search.param }}=</code>).
+</p>
+{% endif %}
+<dl class="meta">
+  {% for label, routes in route_groups %}
+  <dt>{{ label }}</dt>
+  <dd>
+    {% for r in routes %}<code>{{ r }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+  </dd>
+  {% endfor %}
+</dl>
+</section>
+
+<section>
+<h2>Hard rules &mdash; bot side</h2>
+<p class="hint">Any of these &rarr; <code class="cls-bot_known">bot_known</code>.{% if n_sessions %} Rates over {{ n_sessions | fmt_int }} sessions.{% endif %}</p>
+<ul class="rules">
+{% for r in hard_bot_rules %}
+  <li>
+    <code>{{ r.name }}</code> &mdash; {{ r.description }}
+    {% if hard_rule_rates.get(r.name) is not none %}
+      <span class="rate">{{ hard_rule_rates[r.name] | fmt_pct }}</span>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+</section>
+
+<section>
+<h2>Hard rules &mdash; human side</h2>
+<p class="hint">
+  Any of these &rarr; <code class="cls-human_known">human_known</code>, unless a
+  bot hard rule already fired (bots win).
+</p>
+<ul class="rules">
+{% for r in hard_human_rules %}
+  <li>
+    <code>{{ r.name }}</code> &mdash; {{ r.description }}
+    {% if hard_rule_rates.get(r.name) is not none %}
+      <span class="rate">{{ hard_rule_rates[r.name] | fmt_pct }}</span>
+    {% endif %}
+  </li>
+{% endfor %}
+</ul>
+</section>
+
+<section>
+<h2>Soft rules</h2>
+<p class="hint">
+  Applied only when no hard rule fired. Scores are summed; the session lands as
+  <code class="cls-human_likely">human_likely</code> at <code>score &ge;
+  {{ soft_human_threshold }}</code>,
+  <code class="cls-bot_likely">bot_likely</code> at <code>score &le;
+  {{ soft_bot_threshold }}</code>, otherwise <code class="cls-unknown">unknown</code>.
+</p>
+<table class="rule-table">
+  <thead><tr><th>Score</th><th>Name</th><th>When it fires</th>{% if n_sessions %}<th>Observed</th>{% endif %}</tr></thead>
+  <tbody>
+  {% for r in soft_rules %}
+    <tr>
+      <td class="{{ 'pos' if r.score > 0 else 'neg' }}">
+        {{ '+' if r.score > 0 else '' }}{{ r.score }}
+      </td>
+      <td><code>{{ r.name }}</code></td>
+      <td>{{ r.description }}</td>
+      {% if n_sessions %}
+      <td>{{ soft_rule_rates.get(r.name, 0) | fmt_pct }}</td>
+      {% endif %}
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</section>
+
+{% if score_dist_chart %}
+<section>
+<h2>Soft score distribution</h2>
+<p class="hint">
+  Sessions that reached soft scoring (no hard rule fired). Dotted lines mark the
+  <code class="cls-human_likely">human_likely</code> / <code class="cls-bot_likely">bot_likely</code> thresholds.
+</p>
+{{ score_dist_chart }}
+</section>
+{% endif %}
+
+{% endblock %}

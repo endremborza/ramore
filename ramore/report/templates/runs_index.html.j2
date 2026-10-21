@@ -1,0 +1,13 @@
+{% extends "_base.html.j2" %}
+{% set depth = 1 %}
+{% block title %}Runs{% endblock %}
+{% block content %}
+<h1>Run history</h1>
+{{ runs_table | safe }}
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("table.dt").forEach(t => new DataTable(t, {pageLength: 50, order: []}));
+});
+</script>
+{% endblock %}

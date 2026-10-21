@@ -1,0 +1,32 @@
+{% extends "_base.html.j2" %}
+{% set depth = 0 %}
+{% block title %}Performance{% endblock %}
+{% block content %}
+<h1>Performance</h1>
+
+<section>
+<h2>Per-route latency (last 24h)</h2>
+{{ route_table | safe }}
+</section>
+
+<section>
+<h2>p99 latency over time (top 8 routes)</h2>
+{{ p99_chart | safe }}
+</section>
+
+<section>
+<h2>Cache hit rate over time</h2>
+{{ cache_chart | safe }}
+</section>
+
+<section>
+<h2>Slowest 100 requests (last 24h)</h2>
+{{ slow_table | safe }}
+</section>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("table.dt").forEach(t => new DataTable(t, {pageLength: 25, order: []}));
+});
+</script>
+{% endblock %}

@@ -1,0 +1,32 @@
+{% extends "_base.html.j2" %}
+{% set depth = 0 %}
+{% block title %}{{ site_name }} — landing{% endblock %}
+{% block content %}
+<h1>Overview</h1>
+
+{% for label, k in [('Last 1h', '1h'), ('Last 24h', '24h'), ('Last 7d', '7d'), ('Last 30d', '30d')] %}
+<section class="kpi-section">
+<h2>{{ label }}</h2>
+<div class="kpi-grid">
+{{ kpis[k].html | safe }}
+</div>
+</section>
+{% endfor %}
+
+<section>
+<h2>Requests over the last 30 days</h2>
+{{ traffic_chart | safe }}
+</section>
+
+{% if login_chart %}
+<section>
+<h2>{{ login_label }} per day</h2>
+{{ login_chart | safe }}
+</section>
+{% endif %}
+
+<section>
+<h2>Bot vs human (sessions)</h2>
+{{ bot_chart | safe }}
+</section>
+{% endblock %}

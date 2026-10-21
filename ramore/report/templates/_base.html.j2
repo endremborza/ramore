@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>{% block title %}{{ site_name }} reports{% endblock %}</title>
+<link rel="stylesheet" href="{{ '../' * depth }}assets/style.css" />
+<link rel="stylesheet" href="https://cdn.datatables.net/2.1.8/css/dataTables.dataTables.min.css" />
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<script src="https://cdn.datatables.net/2.1.8/js/dataTables.min.js"></script>
+</head>
+<body>
+<header>
+  <nav>
+    <a href="{{ '../' * depth }}index.html" class="brand">{{ site_name }} reports</a>
+    <ul>
+      <li><a href="{{ '../' * depth }}index.html" {% if active_page == 'landing' %}class="active"{% endif %}>Landing</a></li>
+      <li><a href="{{ '../' * depth }}traffic.html" {% if active_page == 'traffic' %}class="active"{% endif %}>Traffic</a></li>
+      <li><a href="{{ '../' * depth }}performance.html" {% if active_page == 'performance' %}class="active"{% endif %}>Performance</a></li>
+      <li><a href="{{ '../' * depth }}errors.html" {% if active_page == 'errors' %}class="active"{% endif %}>Errors</a></li>
+      <li><a href="{{ '../' * depth }}sessions/index.html" {% if active_page == 'sessions' %}class="active"{% endif %}>Sessions</a></li>
+      <li><a href="{{ '../' * depth }}classification.html" {% if active_page == 'classification' %}class="active"{% endif %}>Classification</a></li>
+      <li><a href="{{ '../' * depth }}runs/index.html" {% if active_page == 'runs' %}class="active"{% endif %}>Runs</a></li>
+    </ul>
+    <span class="mode-badge mode-{{ mode }}">{{ mode }}</span>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+<footer>
+  <span>Rendered {{ now_iso }}</span>
+  <span>Last pull: {{ state.last_run or '—' }}</span>
+  <span>Last event: {{ state.last_event_ts or '—' }}</span>
+</footer>
+</body>
+</html>

@@ -1,0 +1,7 @@
+{% extends "_base.html.j2" %}
+{% set depth = 1 %}
+{% block title %}Sessions{% endblock %}
+{% block content %}
+<h1>Session request distribution</h1>
+{{ chart | safe }}
+{% endblock %}

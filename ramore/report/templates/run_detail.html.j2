@@ -1,0 +1,11 @@
+{% extends "_base.html.j2" %}
+{% set depth = 1 %}
+{% block title %}Run {{ run.ts }}{% endblock %}
+{% block content %}
+<h1>Run {{ run.ts }}</h1>
+<dl class="meta">
+{% for k, v in run.items() %}
+  <dt>{{ k }}</dt><dd>{{ v }}</dd>
+{% endfor %}
+</dl>
+{% endblock %}

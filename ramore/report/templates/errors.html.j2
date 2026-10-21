@@ -1,0 +1,27 @@
+{% extends "_base.html.j2" %}
+{% set depth = 0 %}
+{% block title %}Errors{% endblock %}
+{% block content %}
+<h1>Errors (last 7 days)</h1>
+
+<section>
+<h2>5xx</h2>
+{{ table_5xx | safe }}
+</section>
+
+<section>
+<h2>4xx (excluding 404 from bots)</h2>
+{{ table_4xx | safe }}
+</section>
+
+<section>
+<h2>429 rate-limit hits</h2>
+{{ table_429 | safe }}
+</section>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+  document.querySelectorAll("table.dt").forEach(t => new DataTable(t, {pageLength: 30, order: []}));
+});
+</script>
+{% endblock %}
