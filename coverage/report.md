@@ -6,7 +6,7 @@
 | ramore/box/\_\_init\_\_.py               |       62 |        6 |     90% |
 | ramore/box/sample.py                     |       88 |        7 |     92% |
 | ramore/config.py                         |      121 |        2 |     98% |
-| ramore/demo.py                           |      170 |       13 |     92% |
+| ramore/demo.py                           |      170 |       14 |     92% |
 | ramore/monitor.py                        |       77 |       19 |     75% |
 | ramore/report/\_\_init\_\_.py            |        0 |        0 |    100% |
 | ramore/report/aggregate.py               |       54 |        2 |     96% |
@@ -22,10 +22,10 @@
 | ramore/report/render/classification.py   |       21 |        2 |     90% |
 | ramore/report/render/errors.py           |       18 |        1 |     94% |
 | ramore/report/render/landing.py          |       74 |        6 |     92% |
-| ramore/report/render/performance.py      |       32 |        2 |     94% |
+| ramore/report/render/performance.py      |       32 |        4 |     88% |
 | ramore/report/render/runs.py             |        7 |        0 |    100% |
 | ramore/report/render/sessions.py         |       11 |        1 |     91% |
-| ramore/report/render/traffic.py          |       32 |        3 |     91% |
+| ramore/report/render/traffic.py          |       32 |        4 |     88% |
 | ramore/report/reset.py                   |       25 |        4 |     84% |
 | ramore/report/routes.py                  |      114 |        2 |     98% |
 | ramore/report/run.py                     |      136 |        7 |     95% |
@@ -49,4 +49,4 @@
 | ramore/tests/test\_sample.py             |       55 |        0 |    100% |
 | ramore/tests/test\_sessions\_classify.py |       53 |        0 |    100% |
 | ramore/units.py                          |       49 |        2 |     96% |
-| **TOTAL**                                | **2427** |  **100** | **96%** |
+| **TOTAL**                                | **2427** |  **104** | **96%** |
