@@ -33,14 +33,17 @@ def main(
     dry_run: bool = False,
     reclassify_all: bool = False,
     mode: Literal["local", "public", "both"] = "public",
+    config_file: str = config.CONFIG_NAME,
 ) -> None:
     """Pull the new log lines, archive, aggregate, render and publish the report.
 
-    --no-pull aggregates and renders what the store holds; --render-only skips aggregation too;
-    --dry-run pulls and parses with no writes; --reclassify-all re-classifies every hot day and
-    rebuilds the aggregates before rendering; --no-publish keeps the site local.
+    A pull first installs or updates ramore's side of the box when it is not current (`ramore
+    box`). --no-pull aggregates and renders what the store holds; --render-only skips aggregation
+    too; --dry-run pulls and parses with no writes, the box included; --reclassify-all
+    re-classifies every hot day and rebuilds the aggregates before rendering; --no-publish keeps
+    the site local, as does an app without a [publish] section.
     """
-    config.use(config.load()).ensure_dirs()
+    config.use(config.load(config_file)).ensure_dirs()
     run_log = _open_run_log()
     run_record = {"ts": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")}
     started = time.time()
@@ -211,7 +214,7 @@ def _do_render(mode: str, no_publish: bool, rec: dict) -> None:
         rendered.append("public")
     rec["rendered"] = rendered
 
-    if "public" in rendered and not no_publish:
+    if "public" in rendered and not no_publish and config.get().publish is not None:
         from . import publish
 
         with timing.timed("publish"):

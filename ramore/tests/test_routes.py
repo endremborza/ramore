@@ -79,5 +79,67 @@ worktree = "/tmp/example-ghpages"
     assert cfg.store == tmp_path / "store"
     assert cfg.hosts == {"www.example.org"}
     assert cfg.api_routes == API_ROUTES
-    assert cfg.log_path == config.DEFAULT_LOG
+    assert cfg.publish == config.Publish(
+        Path("/tmp/example-ghpages"), config.DEFAULT_BRANCH, config.DEFAULT_REMOTE
+    )
     assert cfg.sveltekit is None and cfg.search is None and cfg.login is None
+    assert cfg.metrics is None
+
+
+def test_load_extends(tmp_path: Path):
+    (tmp_path / config.CONFIG_NAME).write_text(
+        """name = "Example"
+store = "store"
+
+[source]
+ssh = "example-live"
+hosts = ["www.example.org"]
+
+[search]
+route = "/v1/search/{kind}"
+param = "q"
+
+[publish]
+worktree = "/tmp/example-ghpages"
+"""
+    )
+    (tmp_path / "alpha.toml").write_text(
+        f"""extends = "{config.CONFIG_NAME}"
+store = "store-alpha"
+publish = false
+
+[source]
+ssh = "example-alpha"
+hosts = ["alpha.example.org"]
+"""
+    )
+    cfg = config.load(tmp_path / "alpha.toml")
+    assert (cfg.name, cfg.store, cfg.ssh_host) == (
+        "Example",
+        tmp_path / "store-alpha",
+        "example-alpha",
+    )
+    assert cfg.hosts == {"alpha.example.org"} and cfg.publish is None
+    assert cfg.search == config.Search("/v1/search/{kind}", "q")
+
+
+def test_load_metrics_defaults(tmp_path: Path):
+    (tmp_path / config.CONFIG_NAME).write_text(
+        """name = "Example"
+store = "store"
+
+[source]
+ssh = "example-live"
+hosts = ["www.example.org"]
+
+[metrics]
+units = ["app-*.service"]
+"""
+    )
+    cfg = config.load(tmp_path / config.CONFIG_NAME)
+    assert cfg.metrics == config.Metrics(
+        config.DEFAULT_METRICS_INTERVAL_S,
+        config.DEFAULT_METRICS_MOUNTS,
+        ("app-*.service",),
+    )
+    assert cfg.publish is None

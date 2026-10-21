@@ -9,7 +9,7 @@ from . import timing
 def publish_to_ghpages(commit_msg: str | None = None) -> None:
     """Push the public site to the app repo's pages branch via a worktree."""
     repo_dir = config.get().root
-    worktree = config.get().ghpages_worktree
+    worktree = _target().worktree
 
     with timing.timed("publish.ensure_worktree"):
         _ensure_worktree(repo_dir, worktree)
@@ -39,8 +39,8 @@ def publish_to_ghpages(commit_msg: str | None = None) -> None:
             "-C",
             worktree.as_posix(),
             "push",
-            config.get().ghpages_remote,
-            config.get().ghpages_branch,
+            _target().remote,
+            _target().branch,
         )
 
 
@@ -50,7 +50,7 @@ def reset_ghpages_history() -> None:
     over. The next publish repopulates the site fresh on top of this root commit."""
     repo_dir = config.get().root
     subprocess.run(["git", "-C", repo_dir.as_posix(), "worktree", "prune"], check=True)
-    if config.get().ghpages_worktree.exists():
+    if _target().worktree.exists():
         subprocess.run(
             [
                 "git",
@@ -59,13 +59,13 @@ def reset_ghpages_history() -> None:
                 "worktree",
                 "remove",
                 "--force",
-                config.get().ghpages_worktree.as_posix(),
+                _target().worktree.as_posix(),
             ],
             check=False,
         )
     # Drop the stale local branch so the next publish re-fetches the reset remote.
     subprocess.run(
-        ["git", "-C", repo_dir.as_posix(), "branch", "-D", config.get().ghpages_branch],
+        ["git", "-C", repo_dir.as_posix(), "branch", "-D", _target().branch],
         check=False,
     )
 
@@ -101,8 +101,8 @@ def reset_ghpages_history() -> None:
             tmp.as_posix(),
             "push",
             "-f",
-            config.get().ghpages_remote,
-            f"{tmp_branch}:{config.get().ghpages_branch}",
+            _target().remote,
+            f"{tmp_branch}:{_target().branch}",
         )
     finally:
         subprocess.run(
@@ -129,8 +129,8 @@ def _current_cname(repo: Path) -> str | None:
             "-C",
             repo.as_posix(),
             "fetch",
-            config.get().ghpages_remote,
-            config.get().ghpages_branch,
+            _target().remote,
+            _target().branch,
         ],
         capture_output=True,
     )
@@ -152,7 +152,7 @@ def _ensure_worktree(repo: Path, worktree: Path) -> None:
     if worktree.exists() and (worktree / ".git").exists():
         return
     worktree.parent.mkdir(parents=True, exist_ok=True)
-    remote_branch = f"{config.get().ghpages_remote}/{config.get().ghpages_branch}"
+    remote_branch = f"{_target().remote}/{_target().branch}"
     has_remote_branch = (
         subprocess.run(
             [
@@ -162,8 +162,8 @@ def _ensure_worktree(repo: Path, worktree: Path) -> None:
                 "ls-remote",
                 "--exit-code",
                 "--heads",
-                config.get().ghpages_remote,
-                config.get().ghpages_branch,
+                _target().remote,
+                _target().branch,
             ],
             capture_output=True,
         ).returncode
@@ -176,8 +176,8 @@ def _ensure_worktree(repo: Path, worktree: Path) -> None:
                 "-C",
                 repo.as_posix(),
                 "fetch",
-                config.get().ghpages_remote,
-                config.get().ghpages_branch,
+                _target().remote,
+                _target().branch,
             ],
             check=True,
         )
@@ -189,7 +189,7 @@ def _ensure_worktree(repo: Path, worktree: Path) -> None:
                 "worktree",
                 "add",
                 "-B",
-                config.get().ghpages_branch,
+                _target().branch,
                 worktree.as_posix(),
                 remote_branch,
             ],
@@ -205,7 +205,7 @@ def _ensure_worktree(repo: Path, worktree: Path) -> None:
                 "add",
                 "--orphan",
                 "-b",
-                config.get().ghpages_branch,
+                _target().branch,
                 worktree.as_posix(),
             ],
             check=True,
@@ -248,3 +248,10 @@ def _default_msg() -> str:
 
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], check=True)
+
+
+def _target() -> config.Publish:
+    target = config.get().publish
+    if target is None:
+        raise RuntimeError("the app's ramore.toml has no [publish] section")
+    return target

@@ -36,16 +36,18 @@ def make_config(root: Path) -> config.Config:
         root=root,
         store=root / "store",
         ssh_host="example-live",
-        log_path=config.DEFAULT_LOG,
         hosts=frozenset({"www.example.org", "example.org", "api.example.org"}),
         api_routes=API_ROUTES,
         sveltekit=root,
         search=SEARCH,
         login=LOGIN,
+        metrics=None,
+        monitor=None,
+        alerts=config.Alerts(),
         site_include={},
-        ghpages_worktree=root / "ghpages",
-        ghpages_branch=config.DEFAULT_BRANCH,
-        ghpages_remote=config.DEFAULT_REMOTE,
+        publish=config.Publish(
+            root / "ghpages", config.DEFAULT_BRANCH, config.DEFAULT_REMOTE
+        ),
     )
 
 

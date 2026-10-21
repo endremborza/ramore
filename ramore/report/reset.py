@@ -23,9 +23,14 @@ def wipe_local() -> None:
     cfg.ensure_dirs()
 
 
-def main(*, local_only: bool = False, yes: bool = False) -> None:
+def main(
+    *,
+    local_only: bool = False,
+    yes: bool = False,
+    config_file: str = config.CONFIG_NAME,
+) -> None:
     """Erase the report history: the local store and, without --local-only, the published site."""
-    config.use(config.load())
+    local_only = local_only or config.use(config.load(config_file)).publish is None
     scope = (
         "the local report store"
         if local_only
