@@ -89,3 +89,46 @@ def test_box_checks_on_the_latest_sample():
         "anon be.service": True,
         "fds be.service": False,
     }
+
+
+def test_send_mails_one_message_per_step(monkeypatch):
+    sent = []
+
+    class SMTP:
+        def __init__(self, host, port, timeout):
+            assert (host, port) == ("smtp.example.org", alert.SMTP_SSL_PORT)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def login(self, user, password):
+            assert (user, password) == ("me@example.org", "secret")
+
+        def send_message(self, msg):
+            sent.append(msg)
+
+    env = dict(zip(alert.SMTP_ENV, ("smtp.example.org", "me@example.org", "secret")))
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.delenv(alert.MAIL_TO_ENV, raising=False)
+    monkeypatch.setattr(alert.smtplib, "SMTP_SSL", SMTP)
+    alert.send(
+        [
+            alert.Event("memory", "fired", "99%", 0),
+            alert.Event("disk /", "resolved", "50%", 0),
+        ]
+    )
+    (msg,) = sent
+    assert msg["Subject"] == f"{config.get().name}: 1 fired, 1 resolved (memory)"
+    assert msg["To"] == "me@example.org"
+    assert "fired memory: 99%\nresolved disk /: 50%" in msg.get_content()
+
+
+def test_mail_env_names_what_is_missing(monkeypatch):
+    for k in alert.SMTP_ENV:
+        monkeypatch.delenv(k, raising=False)
+    with pytest.raises(RuntimeError, match=alert.SMTP_ENV[0]):
+        alert.mail_env()
