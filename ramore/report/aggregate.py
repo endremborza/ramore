@@ -104,7 +104,7 @@ def _agg_block(df: pl.DataFrame, every: str) -> pl.DataFrame:
             urt.quantile(0.999).alias("urt_p999"),
         )
         .sort("bucket")
-        .collect(streaming=True)
+        .collect(engine="streaming")
     )
 
 

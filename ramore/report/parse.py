@@ -72,7 +72,7 @@ def map_distinct(
     lookup = df.select(pl.col(col).unique()).with_columns(
         pl.col(col).map_elements(fn, return_dtype=pl.String).alias(alias)
     )
-    return df.join(lookup, on=col, how="left", join_nulls=True)
+    return df.join(lookup, on=col, how="left", nulls_equal=True)
 
 
 def keep_live_hosts(df: pl.DataFrame) -> tuple[pl.DataFrame, int]:

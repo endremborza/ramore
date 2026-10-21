@@ -63,11 +63,11 @@ def _p99_per_route_chart(hourly: pl.DataFrame) -> str:
     top = (
         recent.group_by("route_template")
         .agg(pl.col("n").sum())
-        .sort("n", descending=True)
+        .sort(["n", "route_template"], descending=[True, False])
         .head(TOP_ROUTES_CHARTED)["route_template"]
     )
     g = (
-        recent.filter(pl.col("route_template").is_in(top))
+        recent.filter(pl.col("route_template").is_in(top.implode()))
         .group_by("bucket", "route_template")
         .agg((pl.col("urt_p99").max() * 1000).alias("p99_ms"))
     )

@@ -83,7 +83,7 @@ def kpis(events: pl.DataFrame, sessions: pl.DataFrame, hours: int) -> Kpis:
             p99=pl.col("urt").quantile(0.99),
             **login_counts,
         )
-        .collect(streaming=True)
+        .collect(engine="streaming")
         .row(0, named=True)
     )
     n = k["n"]
@@ -124,7 +124,7 @@ def _session_classes(sessions: pl.DataFrame, cutoff: pl.Expr) -> dict[str, int]:
         .filter(pl.col("end") >= cutoff)
         .group_by("bot_class")
         .len()
-        .collect(streaming=True)
+        .collect(engine="streaming")
         .iter_rows()
     )
 

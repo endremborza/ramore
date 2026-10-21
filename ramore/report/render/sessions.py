@@ -36,13 +36,13 @@ def _req_distribution(sessions: pl.DataFrame) -> str:
         sessions.lazy()
         .group_by(
             pl.col("n_req")
-            .cut(REQ_BREAKS, labels=REQ_LABELS)
+            .bin_intervals(REQ_BREAKS, labels=REQ_LABELS, right_closed=True)
             .cast(pl.String)
             .alias("bucket"),
             "bot_class",
         )
         .len()
-        .collect(streaming=True)
+        .collect(engine="streaming")
     )
     return plotly_div(
         "req-dist",
