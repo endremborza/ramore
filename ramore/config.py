@@ -71,11 +71,10 @@ class Alerts:
 
 @dataclass(frozen=True)
 class Publish:
-    """Where the public site is pushed: `branch` of `remote`, checked out at `worktree`."""
+    """Where the public site is pushed: `branch` of the app repo's `remote`."""
 
-    worktree: Path
-    branch: str
-    remote: str
+    branch: str = DEFAULT_BRANCH
+    remote: str = DEFAULT_REMOTE
 
 
 @dataclass(frozen=True)
@@ -181,7 +180,7 @@ def load(path: Path | str = CONFIG_NAME) -> Config:
             name: root / rel
             for name, rel in raw.get("site", {}).get("include", {}).items()
         },
-        publish=_publish(raw["publish"]) if "publish" in raw else None,
+        publish=Publish(**raw["publish"]) if "publish" in raw else None,
     )
 
 
@@ -204,14 +203,6 @@ def _metrics(raw: dict) -> Metrics:
         interval_s=raw.get("interval_s", DEFAULT_METRICS_INTERVAL_S),
         mounts=tuple(raw.get("mounts", DEFAULT_METRICS_MOUNTS)),
         units=tuple(raw["units"]),
-    )
-
-
-def _publish(raw: dict) -> Publish:
-    return Publish(
-        worktree=Path(raw["worktree"]),
-        branch=raw.get("branch", DEFAULT_BRANCH),
-        remote=raw.get("remote", DEFAULT_REMOTE),
     )
 
 

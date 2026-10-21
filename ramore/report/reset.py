@@ -1,9 +1,9 @@
 """Scrub all report history and start fresh.
 
 Run before pointing the report at a new box: wipes the local store's archive, aggregates,
-sites, run logs and state, and (unless ``--local-only``) force-pushes an empty pages branch so
-no previously published report survives in history. The next run rebuilds everything from the
-new box's log.
+sites, run logs and state, and (unless `--local-only`) replaces the pages branch's history with
+one commit holding only `publish.CARRIED`, so no previously published report survives. The next
+run rebuilds everything from the new box's log.
 """
 
 import shutil
@@ -45,5 +45,5 @@ def main(
     wipe_local()
     print("local report history wiped")
     if not local_only:
-        publish.reset_ghpages_history()
-        print("pages history reset to a single empty commit")
+        publish.reset()
+        print("pages history reset to a single commit")

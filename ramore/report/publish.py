@@ -1,253 +1,97 @@
+"""The public site on the app repo's pages branch, by git plumbing in the app's repo: the site
+directory goes through a temporary index into a commit on the branch's remote head, then a push;
+nothing is checked out. `CARRIED` files on the branch (GitHub writes `CNAME` for a custom domain)
+pass into every commit."""
+
+import datetime as dt
+import os
 import subprocess
 import tempfile
 from pathlib import Path
 
 from .. import config
-from . import timing
+
+CARRIED = ("CNAME",)
+_LS_REMOTE_NO_MATCH = 2
 
 
-def publish_to_ghpages(commit_msg: str | None = None) -> None:
-    """Push the public site to the app repo's pages branch via a worktree."""
-    repo_dir = config.get().root
-    worktree = _target().worktree
-
-    with timing.timed("publish.ensure_worktree"):
-        _ensure_worktree(repo_dir, worktree)
-    with timing.timed("publish.reset_clean_rsync"):
-        _git(repo_dir, "-C", worktree.as_posix(), "reset", "--hard")
-        _clean_worktree(worktree)
-        _rsync(config.get().site_public_dir, worktree)
-        (worktree / ".nojekyll").touch()
-    with timing.timed("publish.git_add"):
-        _git(repo_dir, "-C", worktree.as_posix(), "add", "-A")
-
-    if not _has_changes(repo_dir, worktree):
-        return
-
-    with timing.timed("publish.git_commit"):
+def publish() -> bool:
+    """Commit `site-public/` onto the pages branch and push it; False when the site is unchanged."""
+    head = _remote_head()
+    git_dir = _git("rev-parse", "--absolute-git-dir")
+    with tempfile.TemporaryDirectory() as tmp:
+        index = {**os.environ, "GIT_INDEX_FILE": str(Path(tmp) / "index")}
+        site = config.get().site_public_dir
         _git(
-            repo_dir,
-            "-C",
-            worktree.as_posix(),
-            "commit",
-            "-m",
-            commit_msg or _default_msg(),
+            "--git-dir",
+            git_dir,
+            "--work-tree",
+            ".",
+            "add",
+            "--all",
+            "--force",
+            ".",
+            cwd=site,
+            env=index,
         )
-    with timing.timed("publish.git_push"):
-        _git(
-            repo_dir,
-            "-C",
-            worktree.as_posix(),
-            "push",
-            _target().remote,
-            _target().branch,
-        )
+        if carried := _carried(head):
+            _git("update-index", "--index-info", stdin=carried, env=index)
+        tree = _git("write-tree", env=index)
+    if head is not None and tree == _git("rev-parse", f"{head}^{{tree}}"):
+        return False
+    msg = "report " + dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M")
+    _push(_git("commit-tree", tree, *(["-p", head] if head else []), "-m", msg))
+    return True
 
 
-def reset_ghpages_history() -> None:
-    """Replace the entire gh-pages branch with a single empty commit (force-push),
-    erasing every previously published report. A ``CNAME`` (custom domain) is carried
-    over. The next publish repopulates the site fresh on top of this root commit."""
-    repo_dir = config.get().root
-    subprocess.run(["git", "-C", repo_dir.as_posix(), "worktree", "prune"], check=True)
-    if _target().worktree.exists():
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                repo_dir.as_posix(),
-                "worktree",
-                "remove",
-                "--force",
-                _target().worktree.as_posix(),
-            ],
-            check=False,
-        )
-    # Drop the stale local branch so the next publish re-fetches the reset remote.
-    subprocess.run(
-        ["git", "-C", repo_dir.as_posix(), "branch", "-D", _target().branch],
-        check=False,
+def reset() -> None:
+    """Replace the pages branch's history with one commit of the `CARRIED` files (force push)."""
+    tree = _git("mktree", stdin=_carried(_remote_head()))
+    _push(_git("commit-tree", tree, "-m", "reset published history"), "--force")
+
+
+def _remote_head() -> str | None:
+    """The pages branch's head on the remote, fetched; None when the remote has no such branch."""
+    t = _target()
+    listed = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "--heads", t.remote, t.branch],
+        cwd=config.get().root,
+        stdout=subprocess.DEVNULL,
     )
-
-    cname = _current_cname(repo_dir)
-    tmp = Path(tempfile.mkdtemp(prefix="ghpages-reset-"))
-    tmp_branch = "gh-pages-reset"
-    subprocess.run(
-        ["git", "-C", repo_dir.as_posix(), "branch", "-D", tmp_branch], check=False
-    )
-    try:
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                repo_dir.as_posix(),
-                "worktree",
-                "add",
-                "--orphan",
-                "-b",
-                tmp_branch,
-                tmp.as_posix(),
-            ],
-            check=True,
-        )
-        (tmp / ".nojekyll").touch()
-        if cname:
-            (tmp / "CNAME").write_text(cname)
-        _git(repo_dir, "-C", tmp.as_posix(), "add", "-A")
-        _git(repo_dir, "-C", tmp.as_posix(), "commit", "-m", "reset published history")
-        _git(
-            repo_dir,
-            "-C",
-            tmp.as_posix(),
-            "push",
-            "-f",
-            _target().remote,
-            f"{tmp_branch}:{_target().branch}",
-        )
-    finally:
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                repo_dir.as_posix(),
-                "worktree",
-                "remove",
-                "--force",
-                tmp.as_posix(),
-            ],
-            check=False,
-        )
-        subprocess.run(
-            ["git", "-C", repo_dir.as_posix(), "branch", "-D", tmp_branch], check=False
-        )
-
-
-def _current_cname(repo: Path) -> str | None:
-    fetched = subprocess.run(
-        [
-            "git",
-            "-C",
-            repo.as_posix(),
-            "fetch",
-            _target().remote,
-            _target().branch,
-        ],
-        capture_output=True,
-    )
-    if fetched.returncode != 0:
+    if listed.returncode == _LS_REMOTE_NO_MATCH:
         return None
-    shown = subprocess.run(
-        ["git", "-C", repo.as_posix(), "show", "FETCH_HEAD:CNAME"],
-        capture_output=True,
-        text=True,
-    )
-    return shown.stdout if shown.returncode == 0 and shown.stdout.strip() else None
+    listed.check_returncode()
+    _git("fetch", "--quiet", t.remote, t.branch)
+    return _git("rev-parse", "FETCH_HEAD")
 
 
-def _ensure_worktree(repo: Path, worktree: Path) -> None:
-    # Prune stale registrations first — `/tmp` clean-ups (or any external
-    # removal of the worktree dir) leave the registration intact, so a later
-    # `worktree add` fails with "branch is already used by worktree at ...".
-    subprocess.run(["git", "-C", repo.as_posix(), "worktree", "prune"], check=True)
-    if worktree.exists() and (worktree / ".git").exists():
-        return
-    worktree.parent.mkdir(parents=True, exist_ok=True)
-    remote_branch = f"{_target().remote}/{_target().branch}"
-    has_remote_branch = (
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                repo.as_posix(),
-                "ls-remote",
-                "--exit-code",
-                "--heads",
-                _target().remote,
-                _target().branch,
-            ],
-            capture_output=True,
-        ).returncode
-        == 0
-    )
-    if has_remote_branch:
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                repo.as_posix(),
-                "fetch",
-                _target().remote,
-                _target().branch,
-            ],
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                repo.as_posix(),
-                "worktree",
-                "add",
-                "-B",
-                _target().branch,
-                worktree.as_posix(),
-                remote_branch,
-            ],
-            check=True,
-        )
-    else:
-        subprocess.run(
-            [
-                "git",
-                "-C",
-                repo.as_posix(),
-                "worktree",
-                "add",
-                "--orphan",
-                "-b",
-                _target().branch,
-                worktree.as_posix(),
-            ],
-            check=True,
-        )
+def _carried(head: str | None) -> str:
+    """`head`'s `CARRIED` entries in `ls-tree` form, which `update-index` and `mktree` read."""
+    entries = _git("ls-tree", head, *CARRIED) if head else ""
+    return entries + "\n" if entries else ""
 
 
-def _clean_worktree(worktree: Path) -> None:
-    for child in worktree.iterdir():
-        if child.name == ".git":
-            continue
-        if child.is_dir():
-            subprocess.run(["rm", "-rf", child.as_posix()], check=True)
-        else:
-            child.unlink()
+def _push(commit: str, *flags: str) -> None:
+    t = _target()
+    _git("push", "--quiet", *flags, t.remote, f"{commit}:refs/heads/{t.branch}")
 
 
-def _rsync(src: Path, dst: Path) -> None:
-    src_str = src.as_posix().rstrip("/") + "/"
-    subprocess.run(
-        ["rsync", "-a", "--delete", "--exclude=.git", src_str, dst.as_posix()],
-        check=True,
-    )
-
-
-def _has_changes(repo: Path, worktree: Path) -> bool:
-    out = subprocess.run(
-        ["git", "-C", worktree.as_posix(), "status", "--porcelain"],
-        capture_output=True,
+def _git(
+    *args: str,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+    stdin: str = "",
+) -> str:
+    """`git args` in the app's repo (or `cwd`); its stdout, stripped."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd or config.get().root,
+        env=env,
+        input=stdin,
+        stdout=subprocess.PIPE,
         text=True,
         check=True,
-    ).stdout
-    return bool(out.strip())
-
-
-def _default_msg() -> str:
-    import datetime as dt
-
-    return "report " + dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M")
-
-
-def _git(repo: Path, *args: str) -> None:
-    subprocess.run(["git", *args], check=True)
+    ).stdout.strip()
 
 
 def _target() -> config.Publish:

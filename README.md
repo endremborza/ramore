@@ -70,9 +70,8 @@ mounts = ["/", "/data"]                # default DEFAULT_METRICS_MOUNTS
 include = { poster = "docs/poster" }   # directories published under the site as-is
 
 [publish]                              # optional: without it the site stays local
-worktree = "/tmp/example-ghpages"      # where the pages branch is checked out
-branch = "gh-pages"                    # default
-remote = "origin"                      # default
+branch = "gh-pages"                    # default DEFAULT_BRANCH
+remote = "origin"                      # the app repo's remote; default DEFAULT_REMOTE
 ```
 
 How the report works, what it stores and what it installs on the box: [docs/report.md](docs/report.md).

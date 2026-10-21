@@ -72,16 +72,13 @@ hosts = ["WWW.example.org"]
 api = "gen/routes.py:API_ROUTES"
 
 [publish]
-worktree = "/tmp/example-ghpages"
 """
     )
     cfg = config.load(tmp_path / config.CONFIG_NAME)
     assert cfg.store == tmp_path / "store"
     assert cfg.hosts == {"www.example.org"}
     assert cfg.api_routes == API_ROUTES
-    assert cfg.publish == config.Publish(
-        Path("/tmp/example-ghpages"), config.DEFAULT_BRANCH, config.DEFAULT_REMOTE
-    )
+    assert cfg.publish == config.Publish()
     assert cfg.sveltekit is None and cfg.search is None and cfg.login is None
     assert cfg.metrics is None
 
@@ -100,7 +97,6 @@ route = "/v1/search/{kind}"
 param = "q"
 
 [publish]
-worktree = "/tmp/example-ghpages"
 """
     )
     (tmp_path / "alpha.toml").write_text(
