@@ -2,16 +2,23 @@ import datetime as dt
 import json
 import os
 import secrets
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .. import config
 
 
 @dataclass
+class Offset:
+    """How far a box log has been read: its inode and byte size at the last pull."""
+
+    inode: int = 0
+    size: int = 0
+
+
+@dataclass
 class State:
-    last_inode: int = 0
-    last_size: int = 0
+    offsets: dict[str, Offset] = field(default_factory=dict)
     last_event_ts: str = ""
     last_run: str = ""
     salt_date: str = ""
@@ -24,9 +31,9 @@ def load() -> State:
     if not path.exists():
         return State()
     raw = json.loads(path.read_text())
-    return State(
-        **{k: raw.get(k, getattr(State(), k)) for k in State.__dataclass_fields__}
-    )
+    fields = {k: raw[k] for k in State.__dataclass_fields__ if k in raw}
+    fields["offsets"] = {p: Offset(**o) for p, o in fields.get("offsets", {}).items()}
+    return State(**fields)
 
 
 def save(s: State) -> None:

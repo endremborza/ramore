@@ -1,84 +1,74 @@
-import subprocess
 from dataclasses import dataclass
 
-from .. import config
-from .state import State
+from .. import config, ssh
+from .state import Offset
 
-FIRST_RUN_TAIL_LINES = 200_000
+FIRST_RUN_TAIL_BYTES = 64 * 2**20
+
+
+@dataclass(frozen=True)
+class Read:
+    """Bytes [start, end) of `path`; `skip_first` drops the line the start may cut."""
+
+    path: str
+    start: int
+    end: int
+    skip_first: bool = False
 
 
 @dataclass
 class FetchResult:
     lines: list[str]
-    new_inode: int
-    new_size: int
+    offset: Offset
     rotated: bool
 
 
-def fetch_new_lines(state: State) -> FetchResult:
-    """SSH-pull new log lines starting from state.last_size byte offset.
+def fetch_new_lines(path: str, offset: Offset) -> FetchResult:
+    """The lines appended to the box's log at `path` since `offset`.
 
-    Handles rotation: if the inode changed, also pulls the unread tail of the rotated
-    `<log>.1` before reading the new active log.
+    Every read stops at the size stat'd up front, so a line appended meanwhile waits for the next
+    run. A changed inode is a rotation: the unread tail of `<path>.1` comes first. A missing log
+    reads as empty and keeps `offset`.
     """
-    cfg = config.get()
-    ssh_host, log, rotated_log = cfg.ssh_host, cfg.log_path, cfg.log_path + ".1"
-    inode, size = _stat(ssh_host, log)
-    rotated = state.last_inode and inode != state.last_inode
-
-    if state.last_inode == 0:
-        # First run ever: only ingest the most recent FIRST_RUN_TAIL_LINES lines so
-        # we don't try to fetch a multi-gigabyte log.
-        lines = _ssh_lines(ssh_host, f"tail -n {FIRST_RUN_TAIL_LINES} {log}")
-        return FetchResult(lines=lines, new_inode=inode, new_size=size, rotated=False)
-
-    if rotated:
-        rot_inode, rot_size = _stat_or_none(ssh_host, rotated_log)
-        old_tail: list[str] = []
-        if rot_inode == state.last_inode and rot_size and rot_size > state.last_size:
-            old_tail = _ssh_lines(
-                ssh_host,
-                f"tail -c +{state.last_size + 1} {rotated_log}",
-            )
-        new_full = _ssh_lines(ssh_host, f"cat {log}")
-        return FetchResult(
-            lines=old_tail + new_full,
-            new_inode=inode,
-            new_size=size,
-            rotated=True,
-        )
-
-    if size < state.last_size:
-        # Truncated without rotation; treat as fresh.
-        new_full = _ssh_lines(ssh_host, f"cat {log}")
-        return FetchResult(lines=new_full, new_inode=inode, new_size=size, rotated=True)
-
-    if size == state.last_size:
-        return FetchResult(lines=[], new_inode=inode, new_size=size, rotated=False)
-
-    tail = _ssh_lines(ssh_host, f"tail -c +{state.last_size + 1} {log}")
-    return FetchResult(lines=tail, new_inode=inode, new_size=size, rotated=False)
-
-
-def _ssh(host: str, cmd: str) -> str:
-    return subprocess.check_output(
-        ["ssh", "-o", "StrictHostKeyChecking=no", host, cmd],
-        text=True,
+    host = config.get().ssh_host
+    cur = _stat(host, path)
+    if cur is None:
+        return FetchResult([], offset, False)
+    rot = (
+        _stat(host, path + ".1") if offset.inode and cur.inode != offset.inode else None
     )
+    reads, rotated = plan_reads(path, offset, cur, rot)
+    lines = [line for r in reads for line in _read(host, r)]
+    return FetchResult(lines, cur, rotated)
 
 
-def _ssh_lines(host: str, cmd: str) -> list[str]:
-    out = _ssh(host, cmd)
-    return out.split("\n")
+def plan_reads(
+    path: str, offset: Offset, cur: Offset, rot: Offset | None
+) -> tuple[list[Read], bool]:
+    """What to read of a log now at `cur` (its rotated `.1` at `rot`), last read to `offset`."""
+    if offset.inode == 0:
+        start = max(0, cur.size - FIRST_RUN_TAIL_BYTES)
+        return [Read(path, start, cur.size, skip_first=start > 0)], False
+    if cur.inode != offset.inode:
+        reads = [Read(path, 0, cur.size)]
+        if rot is not None and rot.inode == offset.inode and rot.size > offset.size:
+            reads.insert(0, Read(path + ".1", offset.size, rot.size))
+        return reads, True
+    if cur.size < offset.size:
+        return [Read(path, 0, cur.size)], True
+    if cur.size == offset.size:
+        return [], False
+    return [Read(path, offset.size, cur.size)], False
 
 
-def _stat(host: str, path: str) -> tuple[int, int]:
-    out = _ssh(host, f"stat -c '%i %s' {path}").strip().split()
-    return int(out[0]), int(out[1])
+def _read(host: str, r: Read) -> list[str]:
+    if r.end <= r.start:
+        return []
+    out = ssh.run(host, f"tail -c +{r.start + 1} {r.path} | head -c {r.end - r.start}")
+    lines = out.decode("utf-8", errors="replace").split("\n")
+    return lines[1:] if r.skip_first else lines
 
 
-def _stat_or_none(host: str, path: str) -> tuple[int | None, int | None]:
-    try:
-        return _stat(host, path)
-    except subprocess.CalledProcessError:
-        return None, None
+def _stat(host: str, path: str) -> Offset | None:
+    out = ssh.run(host, f"stat -c '%i %s' {path} 2>/dev/null || true").split()
+    return Offset(int(out[0]), int(out[1])) if out else None

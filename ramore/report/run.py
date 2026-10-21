@@ -10,10 +10,11 @@ from typing import Literal
 
 import polars as pl
 
-from .. import config
+from .. import alert, box, config
 from . import (
     aggregate,
     archive,
+    metrics,
     parse,
     pull,
     render,
@@ -23,6 +24,7 @@ from . import (
     timing,
 )
 from .classify import annotate_events, classify_sessions
+from .state import Offset
 
 
 def main(
@@ -115,8 +117,11 @@ def _do_reclassify_all(rec: dict) -> None:
 
 
 def _do_dry_run(rec: dict) -> None:
+    rec["box_current"] = box.is_current(config.get())
     s = state.load()
-    fetched = pull.fetch_new_lines(s)
+    fetched = pull.fetch_new_lines(
+        box.REQUEST_LOG, s.offsets.get(box.REQUEST_LOG, Offset())
+    )
     df, fail = parse.parse_lines(fetched.lines)
     df, non_live = parse.keep_live_hosts(df)
     rec["lines_fetched"] = len(fetched.lines)
@@ -127,17 +132,23 @@ def _do_dry_run(rec: dict) -> None:
     if not df.is_empty():
         rec["t_min"] = str(df["t"].min())
         rec["t_max"] = str(df["t"].max())
-    unmatched = (
-        routes.collect_unmatched(df["path"].to_list()) if not df.is_empty() else {}
-    )
+    unmatched = routes.collect_unmatched(df["path"].to_list())
     rec["top_unmatched"] = list(unmatched.most_common(20))
 
 
 def _do_pull_and_archive(rec: dict) -> list[dt.date]:
+    cfg = config.get()
+    with timing.timed("box"):
+        rec["box_installed"] = box.ensure(cfg)
     s = state.load()
+    if cfg.metrics is not None:
+        with timing.timed("pull.metrics"):
+            _pull_metrics(s, rec)
 
     with timing.timed("pull.fetch"):
-        fetched = pull.fetch_new_lines(s)
+        fetched = pull.fetch_new_lines(
+            box.REQUEST_LOG, s.offsets.get(box.REQUEST_LOG, Offset())
+        )
     with timing.timed("pull.parse"):
         df, fail = parse.parse_lines(fetched.lines)
         df, non_live = parse.keep_live_hosts(df)
@@ -149,8 +160,7 @@ def _do_pull_and_archive(rec: dict) -> list[dt.date]:
     rec["rotated"] = fetched.rotated
 
     if df.is_empty():
-        s.last_inode = fetched.new_inode
-        s.last_size = fetched.new_size
+        s.offsets[box.REQUEST_LOG] = fetched.offset
         s.last_run = state.now_iso()
         s.lines_pulled_last_run = len(fetched.lines)
         s.parse_failures_last_run = fail
@@ -178,8 +188,7 @@ def _do_pull_and_archive(rec: dict) -> list[dt.date]:
     if unmatched:
         rec["top_unmatched"] = list(unmatched.most_common(20))
 
-    s.last_inode = fetched.new_inode
-    s.last_size = fetched.new_size
+    s.offsets[box.REQUEST_LOG] = fetched.offset
     s.last_event_ts = str(df["t"].max())
     s.last_run = state.now_iso()
     s.salt_date = state.today_iso()

@@ -15,7 +15,10 @@ from .fixtures import (
     LINE_HOST_LIVE,
     LINE_HOST_RAWIP,
     LINE_HUMAN,
+    LINE_MISSING_KEY,
     LINE_NO_UPSTREAM,
+    LINE_RETRY,
+    LINE_STATUS_000,
     LINE_TORN,
 )
 
@@ -71,6 +74,24 @@ def test_parse_empty_ua_referrer():
     r = df.row(0, named=True)
     assert r["ua"] == ""
     assert r["referrer"] == ""
+
+
+def test_parse_upstream_retry_is_null():
+    df, fail = parse_lines([LINE_RETRY])
+    assert fail == 0
+    assert df.row(0, named=True)["urt"] is None
+
+
+def test_parse_status_000():
+    df, fail = parse_lines([LINE_STATUS_000])
+    assert fail == 0
+    assert df.row(0, named=True)["status"] == 0
+
+
+def test_parse_other_format_counted():
+    df, fail = parse_lines([LINE_MISSING_KEY])
+    assert fail == 1
+    assert len(df) == 0
 
 
 def test_parse_garbage_counted():
