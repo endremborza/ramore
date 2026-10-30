@@ -44,12 +44,12 @@ KPIs per window (requests, sessions, 5xx rate, p99 upstream time, cache hit rate
 Under `store` (keep it out of git):
 
 - `archive/year_month=YYYY-MM/day=DD/`: hot, one row per request, within `COLD_AFTER_DAYS`.
-- `archive-cold/year=YYYY/month=M/`: older days merged per month, heavier zstd, without `archive.FREE_TEXT_COLUMNS`.
+- `archive-cold/year_month=YYYY-MM/day=DD/`: the hot days past `COLD_AFTER_DAYS`, one partition per day, heavier zstd, without `archive.FREE_TEXT_COLUMNS`. A run's compaction reads only the days it moves, whatever the cold archive already holds; a day already cold (a request arriving after its move) gains the hot rows it lacks, and the aggregates read a day wherever it is stored.
 - `aggregates/{hourly,daily,sessions}/`: per-bucket counts and latency quantiles by route, status family, bot class and cache status (`aggregate.LEVELS`); one row per session (`classify.SESSION_SCHEMA`).
 - `metrics/year_month=YYYY-MM/`: the box samples, one row per scope and sample.
 - `site/` (raw values, local only), `site-public/` (anonymized, published), `logs/`, `state.json`, `salts.json`.
 
-The hot archive's columns are `archive.HOT_COLUMNS`. `route_template`, `ua_family`, `bot_class` and `session_id` are written at archive time, so a change to the route table or the rules applies to new rows; `ramore report --reclassify-all` re-classifies the hot days one at a time (not their templates; a session crossing midnight is classified per day) and rebuilds the aggregates. A rebuild aggregates the archive one day at a time, reading each cold month once.
+The hot archive's columns are `archive.HOT_COLUMNS`. `route_template`, `ua_family`, `bot_class` and `session_id` are written at archive time, so a change to the route table or the rules applies to new rows; `ramore report --reclassify-all` re-classifies the hot days one at a time (not their templates; a session crossing midnight is classified per day) and rebuilds the aggregates. A rebuild aggregates the archive one day at a time, hot and cold alike.
 
 ## Anonymization
 

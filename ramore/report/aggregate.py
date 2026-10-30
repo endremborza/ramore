@@ -34,14 +34,12 @@ def rebuild() -> dict[str, int]:
 
 
 def update(dates: list[dt.date]) -> dict[str, int]:
-    """Re-aggregate the buckets of `dates` from the hot archive, keeping every other bucket; a
-    store without aggregates yet is rebuilt."""
-    if not dates:
-        return {"rows": 0}
+    """Re-aggregate the buckets of `dates` from the archive, hot or cold, keeping every other
+    bucket; a store without aggregates yet is rebuilt."""
     if _repo("hourly").n_files == 0:
         return rebuild()
-    new = pl.concat([archive.read_hot(d, d, AGG_COLS) for d in dates], how="diagonal")
-    out = {"rows": len(new), "updated_dates": len(dates)}
+    new = pl.concat([archive.read_day(d, AGG_COLS) for d in dates], how="diagonal")
+    out = {"rows": len(new)}
     for level, every in LEVELS.items():
         repo = _repo(level)
         kept = repo.get_full_df().filter(~pl.col("bucket").dt.date().is_in(dates))

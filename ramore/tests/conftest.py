@@ -72,3 +72,8 @@ def annotated(lines: list[str]) -> pl.DataFrame:
     """Request-log lines as the archive stores them, before the write."""
     df = assign_sessions(annotate_routes(parse_lines(lines)[0]))
     return annotate_events(df, classify_sessions(df))
+
+
+def aged(lines: list[str], days: int) -> pl.DataFrame:
+    """`annotated(lines)`, `days` days older."""
+    return annotated(lines).with_columns(pl.col("t") - pl.duration(days=days))
