@@ -22,6 +22,9 @@ class State:
     last_event_ts: str = ""
     last_run: str = ""
 
+    def offset(self, log: str) -> Offset:
+        return self.offsets.get(log, Offset())
+
 
 def load() -> State:
     path = config.get().state_path

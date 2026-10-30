@@ -13,7 +13,8 @@ from polars.testing import assert_frame_equal
 
 from ramore import alert, box, config, demo, units
 from ramore.__main__ import main
-from ramore.report import aggregate, archive, parse, publish
+from ramore.report import aggregate, archive, parse, publish, pull, state
+from ramore.report import run as report_run
 
 from .conftest import FakeBox
 
@@ -82,6 +83,20 @@ def _published(remote: Path) -> tuple[int, set[str]]:
     )
 
 
+def _n_live(lines: list[str]) -> int:
+    return len(parse.keep_live_hosts(parse.parse_lines(lines)[0])[0])
+
+
+def _assert_aggregates_match_rebuild() -> None:
+    incremental = {level: aggregate.load(level) for level in aggregate.LEVELS}
+    aggregate.rebuild()
+    keys = aggregate.GROUP_KEYS
+    for level, df in incremental.items():
+        assert_frame_equal(
+            df.sort(keys), aggregate.load(level).sort(keys), check_exact=False
+        )
+
+
 def _runs() -> list[dict]:
     logs = sorted(config.get().run_logs_dir.glob("run-*.log"))
     return [json.loads(line) for f in logs for line in f.read_text().splitlines()]
@@ -118,21 +133,15 @@ def test_report_end_to_end(
     log.rename(fake_box.path(box.REQUEST_LOG + ".1"))
     _append(log, after_rotation)
     _ramore(monkeypatch, "report", "--mode", "both")
-    live, _ = parse.keep_live_hosts(parse.parse_lines(lines)[0])
-    assert len(archive.read_hot()) == len(live), (
+    n_live = _n_live(lines)
+    assert len(archive.read_hot()) == n_live, (
         "every line archived once, across the rotation"
     )
-    incremental = {level: aggregate.load(level) for level in aggregate.LEVELS}
-    aggregate.rebuild()
-    for level, df in incremental.items():
-        keys = aggregate.GROUP_KEYS
-        assert_frame_equal(
-            df.sort(keys), aggregate.load(level).sort(keys), check_exact=False
-        )
+    _assert_aggregates_match_rebuild()
     assert _published(app)[0] == 3
 
     _ramore(monkeypatch, "report", "--reclassify-all", "--no-publish")
-    assert len(archive.read_hot()) == len(live)
+    assert len(archive.read_hot()) == n_live
     _ramore(monkeypatch, "report", "--dry-run")
     runs = _runs()
     assert [r["status"] for r in runs] == ["ok"] * 4
@@ -172,3 +181,51 @@ def test_failed_run_raises_and_logs_once(
     (run,) = _runs()
     assert run["status"] == "error" and "CalledProcessError" in run["error"]
     assert "duration_s" in run
+
+
+def test_a_failed_alert_mail_leaves_the_report_running(
+    fake_box: FakeBox, monkeypatch: pytest.MonkeyPatch
+):
+    cfg_file = config.get().root / config.CONFIG_NAME
+    cfg_file.write_text(cfg_file.read_text() + "\n[alerts]\nmemory_pct = 1\n")
+    for k in alert.SMTP_ENV:
+        monkeypatch.delenv(k, raising=False)
+    end = dt.datetime.now(dt.timezone.utc)
+    hour_ago = end - dt.timedelta(hours=1)
+    _append(fake_box.path(box.REQUEST_LOG), demo.traffic(hour_ago, end, visitors=5))
+    _append(fake_box.path(box.METRICS_LOG), demo.samples(hour_ago, end))
+    _ramore(monkeypatch, "report", "--no-publish")
+    (run,) = _runs()
+    assert run["status"] == "ok" and alert.SMTP_ENV[0] in run["alert_error"]
+    assert not archive.read_hot().is_empty()
+    assert not (config.get().incidents_dir / "report.json").exists(), (
+        "an unsent incident stays open, so the next run mails it"
+    )
+
+
+def test_a_backlog_is_pulled_in_chunks_and_an_interrupted_pull_resumes(
+    fake_box: FakeBox, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(pull, "PULL_CHUNK_BYTES", 2**16)
+    end = dt.datetime.now(dt.timezone.utc)
+    lines = demo.traffic(end - dt.timedelta(days=2), end, visitors=15)
+    log = fake_box.path(box.REQUEST_LOG)
+    _append(log, lines)
+    ingest, chunks = report_run.ingest, 0
+
+    def killed_at_the_third_chunk(*args):
+        nonlocal chunks
+        chunks += 1
+        if chunks == 3:
+            raise MemoryError("killed")
+        return ingest(*args)
+
+    monkeypatch.setattr(report_run, "ingest", killed_at_the_third_chunk)
+    with pytest.raises(MemoryError):
+        _ramore(monkeypatch, "report", "--no-publish")
+    assert 0 < state.load().offsets[box.REQUEST_LOG].size < log.stat().st_size
+    monkeypatch.setattr(report_run, "ingest", ingest)
+    _ramore(monkeypatch, "report", "--no-publish")
+    assert state.load().offsets[box.REQUEST_LOG].size == log.stat().st_size
+    assert len(archive.read_hot()) == _n_live(lines), "no line lost across the chunks"
+    _assert_aggregates_match_rebuild()

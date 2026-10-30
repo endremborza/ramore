@@ -16,7 +16,7 @@ from . import config
 
 REPORT_EVERY_H = 4
 REPORT_AT_MINUTE = 10
-REPORT_MEMORY_MAX = "24G"
+REPORT_MEMORY_MAX = "10G"
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 
 

@@ -25,10 +25,10 @@ from . import (
     timing,
 )
 from .classify import annotate_events, classify_sessions
-from .state import Offset
 
 Mode = Literal["local", "public", "both"]
 TOP_UNMATCHED = 20
+LINE_COUNTS = ("lines_fetched", "events_parsed", "parse_failures", "non_live_dropped")
 
 
 def main(
@@ -56,12 +56,11 @@ def main(
             return
         if reclassify_all:
             _reclassify_all(rec)
-        elif not render_only:
-            dates = None if no_pull else _pull(rec)
+        elif not render_only and no_pull:
             with timing.timed("aggregate"):
-                rec["aggregates"] = (
-                    aggregate.rebuild() if dates is None else aggregate.update(dates)
-                )
+                rec["aggregates"] = aggregate.rebuild()
+        elif not render_only:
+            _pull(rec)
         do_render(mode, rec, push=not no_publish)
 
 
@@ -69,6 +68,7 @@ def main(
 def run_record() -> Iterator[dict]:
     """A run's record (counts, timings, errors), appended to the day's run log once it ends."""
     rec: dict = {"ts": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")}
+    timing.reset()
     started = time.time()
     try:
         yield rec
@@ -77,6 +77,9 @@ def run_record() -> Iterator[dict]:
         rec |= {"status": "error", "error": repr(exc), "trace": traceback.format_exc()}
         raise
     finally:
+        if "top_unmatched" in rec:
+            top = sorted(rec["top_unmatched"].items(), key=lambda kv: (-kv[1], kv[0]))
+            rec["top_unmatched"] = dict(top[:TOP_UNMATCHED])
         rec["duration_s"] = round(time.time() - started, 2)
         rec["timings"] = timing.get()
         line = json.dumps(rec, default=str)
@@ -87,7 +90,8 @@ def run_record() -> Iterator[dict]:
 
 
 def ingest(lines: list[str], s: state.State, rec: dict) -> list[dt.date]:
-    """Request-log lines into the archive and the sessions table; the days they wrote to."""
+    """Request-log lines into the archive and the sessions table, their counts added to `rec`;
+    the days they wrote to."""
     with timing.timed("ingest.parse"):
         df = _parse(lines, rec)
     if df.is_empty():
@@ -99,12 +103,13 @@ def ingest(lines: list[str], s: state.State, rec: dict) -> list[dt.date]:
         aggregate.update_sessions(sess)
         df = annotate_events(df, sess)
     with timing.timed("ingest.write"):
-        rec["written_per_day"] = archive.write_events(df)
+        written = archive.write_events(df)
+    _add(rec, {"written_per_day": written})
     with timing.timed("ingest.compress_cold"):
         if cold := archive.compress_cold(today=dt.date.today()):
-            rec["cold_compaction"] = cold
+            _add(rec, {"cold_compaction": cold})
     s.last_event_ts = str(df["t"].max())
-    return [dt.date.fromisoformat(d) for d in rec["written_per_day"]]
+    return [dt.date.fromisoformat(d) for d in written]
 
 
 def do_render(mode: Mode, rec: dict, push: bool = True) -> None:
@@ -123,7 +128,10 @@ def do_render(mode: Mode, rec: dict, push: bool = True) -> None:
             rec["publish_error"] = repr(exc)
 
 
-def _pull(rec: dict) -> list[dt.date]:
+def _pull(rec: dict) -> None:
+    """The box's new request lines, a chunk at a time: each chunk is archived, its days
+    re-aggregated and its offset saved before the next is read, so a backlog costs one chunk's
+    memory and an interrupted run resumes after its last saved chunk."""
     cfg = config.get()
     with timing.timed("box"):
         rec["box_installed"] = box.ensure(cfg)
@@ -131,27 +139,43 @@ def _pull(rec: dict) -> list[dt.date]:
     if cfg.metrics is not None:
         with timing.timed("pull.metrics"):
             _pull_metrics(s, rec)
-    with timing.timed("pull.requests"):
-        fetched = _fetch(s, box.REQUEST_LOG)
-    rec["rotated"] = fetched.rotated
-    dates = ingest(fetched.lines, s, rec)
-    s.offsets[box.REQUEST_LOG] = fetched.offset
+    rec["aggregates"] = {"rows": 0}
+    rows, days = 0, set()
+    chunks = _request_chunks(s, rec)
+    while True:
+        with timing.timed("pull.requests"):
+            chunk = next(chunks, None)
+        if chunk is None:
+            break
+        if written := ingest(chunk.lines, s, rec):
+            with timing.timed("aggregate"):
+                agg = aggregate.update(written)
+            rows, days = rows + agg["rows"], days | set(written)
+            rec["aggregates"] = agg | {"rows": rows, "updated_dates": len(days)}
+        s.offsets[box.REQUEST_LOG] = chunk.offset
+        state.save(s)
     s.last_run = state.now_iso()
     state.save(s)
-    return dates
 
 
 def _dry_run(rec: dict) -> None:
     rec["box_current"] = box.is_current(config.get())
-    fetched = _fetch(state.load(), box.REQUEST_LOG)
-    rec["rotated"] = fetched.rotated
-    df = _parse(fetched.lines, rec)
-    if not df.is_empty():
-        rec["t_min"], rec["t_max"] = str(df["t"].min()), str(df["t"].max())
+    span = []
+    for chunk in _request_chunks(state.load(), rec):
+        df = _parse(chunk.lines, rec)
+        if not df.is_empty():
+            span += [df["t"].min(), df["t"].max()]
+    if span:
+        rec["t_min"], rec["t_max"] = str(min(span)), str(max(span))
 
 
-def _fetch(s: state.State, log: str) -> pull.FetchResult:
-    return pull.fetch_new_lines(log, s.offsets.get(log, Offset()))
+def _request_chunks(s: state.State, rec: dict) -> Iterator[pull.FetchResult]:
+    """The request log's new chunks, starting `rec`'s line counts and recording whether one read
+    a rotated log."""
+    rec |= dict.fromkeys(LINE_COUNTS, 0) | {"rotated": False}
+    for chunk in pull.fetch_chunks(box.REQUEST_LOG, s.offset(box.REQUEST_LOG)):
+        rec["rotated"] |= chunk.rotated
+        yield chunk
 
 
 def _parse(lines: list[str], rec: dict) -> pl.DataFrame:
@@ -160,29 +184,36 @@ def _parse(lines: list[str], rec: dict) -> pl.DataFrame:
     df, dropped = parse.keep_live_hosts(df)
     df = archive.annotate_routes(df)
     unmatched = df.filter(pl.col("route_template") == routes.UNKNOWN)["path"]
-    rec |= {
-        "lines_fetched": len(lines),
-        "events_parsed": len(df),
-        "parse_failures": failures,
-        "non_live_dropped": dropped,
-    }
+    _add(rec, dict(zip(LINE_COUNTS, (len(lines), len(df), failures, dropped))))
     if len(unmatched):
-        rec["top_unmatched"] = (
-            unmatched.value_counts(sort=True).head(TOP_UNMATCHED).rows()
-        )
+        _add(rec, {"top_unmatched": dict(unmatched.value_counts().iter_rows())})
     return df
 
 
+def _add(rec: dict, counts: dict) -> None:
+    """Add a chunk's counts to its run's record key by key, a nested table per key."""
+    for k, v in counts.items():
+        if isinstance(v, dict):
+            _add(rec.setdefault(k, {}), v)
+        else:
+            rec[k] = rec.get(k, 0) + v
+
+
 def _pull_metrics(s: state.State, rec: dict) -> None:
-    fetched = _fetch(s, box.METRICS_LOG)
+    fetched = pull.fetch_new_lines(box.METRICS_LOG, s.offset(box.METRICS_LOG))
     df, failures = metrics.parse_lines(fetched.lines)
     rec["metrics_rows"] = metrics.write(df)
     rec["metrics_parse_failures"] = failures
     s.offsets[box.METRICS_LOG] = fetched.offset
     if not df.is_empty():
         checks = metrics.checks(df, config.get().alerts)
-        events = alert.run_step("report", checks, time.time(), sustain_s=0)
-        rec["alerts"] = [f"{e.kind} {e.key}: {e.detail}" for e in events]
+        try:
+            events = alert.run_step("report", checks, time.time(), sustain_s=0)
+        except alert.MailError as exc:
+            # the report goes on; the unsaved incident table mails these events next run
+            rec["alert_error"] = str(exc)
+        else:
+            rec["alerts"] = [f"{e.kind} {e.key}: {e.detail}" for e in events]
 
 
 def _reclassify_all(rec: dict) -> None:

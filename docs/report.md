@@ -4,9 +4,9 @@
 
 ## Run
 
-One run brings ramore's side of the box up to date (The box, below), pulls the lines appended to its two logs since the last run, archives the metrics, parses the requests and keeps the app's hosts, templates each path, sessionizes and classifies, writes the hot archive, compacts old days into the cold archive, updates the hourly and daily aggregates, renders the local and/or public site and publishes the public one. Missed runs recover on their own through the per-log byte offsets in `state.json`, rotation included: a changed inode pulls the rotated `<log>.1` tail first. Each read stops at the size stat'd before it, so a line written meanwhile waits for the next run. A first read of a log takes only its last `FIRST_RUN_TAIL_BYTES`.
+One run brings ramore's side of the box up to date (The box, below), pulls the lines appended to its two logs since the last run, archives the metrics, parses the requests and keeps the app's hosts, templates each path, sessionizes and classifies, writes the hot archive, compacts old days into the cold archive, updates the hourly and daily aggregates, renders the local and/or public site and publishes the public one. Missed runs recover on their own through the per-log byte offsets in `state.json`, rotation included: a changed inode pulls the rotated `<log>.1` tail first. Each read stops at the size stat'd before it, so a line written meanwhile waits for the next run. A first read of a log takes only its last `FIRST_RUN_TAIL_BYTES`. The request log is pulled in chunks of at most `pull.PULL_CHUNK_BYTES`, cut at line ends: each chunk is archived, its days re-aggregated and its offset saved before the next is read, so a backlog after downtime costs time rather than memory, and a killed run resumes after its last saved chunk. A session spanning two chunks counts as two, as one spanning two runs does.
 
-Every run appends a JSON record (counts, timings, errors) to `logs/run-<date>.log`; the runs page lists them. Error text can echo raw log content, so the public site drops `error` and `trace` and only the local one keeps them.
+Every run appends a JSON record (counts, timings, errors) to `logs/run-<date>.log`; the runs page lists them. Error text can echo raw log content, so the public site drops `error`, `trace` and `alert_error` and only the local one keeps them.
 
 ## The box
 
