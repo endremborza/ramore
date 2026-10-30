@@ -22,7 +22,7 @@
 | ramore/report/render/classification.py   |       23 |        1 |     96% |
 | ramore/report/render/errors.py           |       20 |        1 |     95% |
 | ramore/report/render/landing.py          |       76 |        5 |     93% |
-| ramore/report/render/performance.py      |       32 |        4 |     88% |
+| ramore/report/render/performance.py      |       32 |        2 |     94% |
 | ramore/report/render/runs.py             |        7 |        0 |    100% |
 | ramore/report/render/sessions.py         |       11 |        1 |     91% |
 | ramore/report/render/traffic.py          |       32 |        3 |     91% |
@@ -49,4 +49,4 @@
 | ramore/tests/test\_sample.py             |       55 |        0 |    100% |
 | ramore/tests/test\_sessions\_classify.py |       53 |        0 |    100% |
 | ramore/units.py                          |       49 |        2 |     96% |
-| **TOTAL**                                | **2600** |  **106** | **96%** |
+| **TOTAL**                                | **2600** |  **104** | **96%** |
