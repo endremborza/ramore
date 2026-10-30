@@ -45,8 +45,9 @@ SESSION_RENDER_COLS = [
     "score",
     *(r.name for r in classify.RULES),
 ]
-# Run fields carrying exception text, which can echo raw log content: local site only.
-_PUBLIC_RUN_DROP_FIELDS = frozenset({"error", "trace"})
+# Run fields carrying exception text, which can echo raw log content or the mail account: local
+# site only.
+_PUBLIC_RUN_DROP_FIELDS = frozenset({"error", "trace", "alert_error"})
 
 
 @dataclass

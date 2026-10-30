@@ -1,4 +1,5 @@
 import json
+import smtplib
 
 import pytest
 
@@ -130,5 +131,16 @@ def test_send_mails_one_message_per_step(monkeypatch):
 def test_mail_env_names_what_is_missing(monkeypatch):
     for k in alert.SMTP_ENV:
         monkeypatch.delenv(k, raising=False)
-    with pytest.raises(RuntimeError, match=alert.SMTP_ENV[0]):
+    with pytest.raises(alert.MailError, match=alert.SMTP_ENV[0]):
         alert.mail_env()
+
+
+def test_a_failed_smtp_exchange_is_a_mail_error(monkeypatch):
+    def refuse(host, port, timeout):
+        raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
+
+    for k in alert.SMTP_ENV:
+        monkeypatch.setenv(k, "x")
+    monkeypatch.setattr(alert.smtplib, "SMTP_SSL", refuse)
+    with pytest.raises(alert.MailError, match="bad credentials"):
+        alert.send([alert.Event("memory", "fired", "99%", 0)])

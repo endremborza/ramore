@@ -22,6 +22,10 @@ SMTP_ENV = ("RAMORE_SMTP_HOST", "RAMORE_SMTP_USER", "RAMORE_SMTP_PASSWORD")
 MAIL_TO_ENV = "RAMORE_MAIL_TO"
 
 
+class MailError(Exception):
+    """An alert mail that did not go out: a setting missing, or the SMTP exchange failed."""
+
+
 @dataclass(frozen=True)
 class Check:
     key: str
@@ -94,7 +98,7 @@ def mail_env() -> dict[str, str]:
     """The SMTP settings from the environment; a missing one raises."""
     missing = [k for k in SMTP_ENV if not os.environ.get(k)]
     if missing:
-        raise RuntimeError(f"mail needs {', '.join(missing)} in the environment")
+        raise MailError(f"mail needs {', '.join(missing)} in the environment")
     return {k: os.environ[k] for k in SMTP_ENV}
 
 
@@ -113,6 +117,9 @@ def send(events: list[Event]) -> None:
         f"from {socket.gethostname()}\n\n"
         + "\n".join(f"{e.kind} {e.key}: {e.detail}" for e in events)
     )
-    with smtplib.SMTP_SSL(host, SMTP_SSL_PORT, timeout=30) as smtp:
-        smtp.login(user, password)
-        smtp.send_message(msg)
+    try:
+        with smtplib.SMTP_SSL(host, SMTP_SSL_PORT, timeout=30) as smtp:
+            smtp.login(user, password)
+            smtp.send_message(msg)
+    except OSError as exc:
+        raise MailError(f"SMTP via {host}: {exc}") from exc
