@@ -1,3 +1,9 @@
+## v0.2.2
+
+- Bump the required shackleton version to 2.1.0.
+
+---
+
 ## v0.2.1
 
 - The request log is now pulled in bounded chunks, each chunk's offset saved as it's archived, so a backlog after downtime costs time rather than memory and an interrupted run resumes from its last saved chunk; the report unit's memory cap drops from 24G to 10G accordingly.
