@@ -64,16 +64,12 @@ def purge_sessions() -> None:
     _sessions_repo().purge()
 
 
-def load_sessions(date_from: dt.date, columns: list[str]) -> pl.DataFrame:
+def scan_sessions(date_from: dt.date, columns: list[str]) -> pl.LazyFrame | None:
+    """The sessions started on or after `date_from`, `columns` projected; None without one."""
     repo = _sessions_repo()
     if repo.n_files == 0:
-        return pl.DataFrame()
-    return (
-        repo.get_full_lf()
-        .filter(pl.col("start_date") >= date_from)
-        .select(columns)
-        .collect()
-    )
+        return None
+    return repo.get_full_lf().filter(pl.col("start_date") >= date_from).select(columns)
 
 
 def _agg_block(df: pl.DataFrame, every: str) -> pl.DataFrame:

@@ -23,7 +23,8 @@ RUNS_SHOWN = 200
 
 # The columns the pages read: the last day's events, and the `HOT_WINDOW_DAYS` window's (only the
 # landing and errors pages read it). Projecting at scan time keeps the free-text columns and the
-# addresses (`addr`, the only PII) out of the render, so neither site needs anonymizing.
+# addresses (`addr`, the only PII) out of the render, so neither site needs anonymizing. The window
+# and its sessions stay scans: each page streams its own aggregate, so neither is ever held whole.
 EVENT_RENDER_COLS = [
     "t",
     "session_id",
@@ -55,9 +56,9 @@ class RenderContext:
     mode: Mode
     out_dir: Path
     env: Environment
-    events_hot: pl.DataFrame
+    events_hot: pl.LazyFrame | None
     events_24h: pl.DataFrame
-    sessions_table: pl.DataFrame
+    sessions_table: pl.LazyFrame | None
     hourly: pl.DataFrame
     daily: pl.DataFrame
     state_snapshot: dict
@@ -90,17 +91,14 @@ def build_context(mode: Mode) -> RenderContext:
     env.filters |= {"fmt_int": fmt_int, "fmt_pct": fmt_pct, "fmt_ms": fmt_ms}
 
     day_ago = now - dt.timedelta(days=1)
+    events_hot = archive.scan_hot(date_from=window_start, columns=WINDOW_RENDER_COLS)
     with timing.timed(f"render.{mode}.read_hot"):
-        events_hot = archive.read_hot(
-            date_from=window_start, columns=WINDOW_RENDER_COLS
-        )
         events_24h = archive.read_hot(
             date_from=day_ago.date(), columns=EVENT_RENDER_COLS
         )
     if not events_24h.is_empty():
         events_24h = events_24h.filter(pl.col("t") >= day_ago)
-    with timing.timed(f"render.{mode}.load_sessions"):
-        sessions_table = aggregate.load_sessions(window_start, SESSION_RENDER_COLS)
+    sessions_table = aggregate.scan_sessions(window_start, SESSION_RENDER_COLS)
     with timing.timed(f"render.{mode}.load_aggregates"):
         hourly, daily = aggregate.load("hourly"), aggregate.load("daily")
 
@@ -127,6 +125,13 @@ def write(ctx: RenderContext, rel_path: str, text: str) -> None:
 
 def hint(text: str) -> str:
     return f"<p class='hint'>{html.escape(text)}</p>"
+
+
+def stream(
+    lf: pl.LazyFrame | None, query: Callable[[pl.LazyFrame], pl.LazyFrame]
+) -> pl.DataFrame:
+    """`query` over `lf`, collected by the streaming engine; an empty frame without a scan."""
+    return pl.DataFrame() if lf is None else query(lf).collect(engine="streaming")
 
 
 def df_to_html(df: pl.DataFrame, *, table_id: str) -> str:

@@ -86,8 +86,8 @@ def test_local_site_keeps_run_errors():
     assert "162.158.162.77" in detail.read_text()
 
 
-def _kpi_events(rows: list[tuple[str, int]], t: dt.datetime) -> pl.DataFrame:
-    return pl.DataFrame(
+def _kpi_events(rows: list[tuple[str, int]], t: dt.datetime) -> pl.LazyFrame:
+    return pl.LazyFrame(
         {
             "t": [t] * len(rows),
             "route_template": [r for r, _ in rows],
@@ -106,14 +106,14 @@ def test_kpis_count_login_outcomes():
         (LOGIN.route, 308),
         ("/about", LOGIN.ok_status),
     ]
-    k = kpis(_kpi_events(rows, dt.datetime.now(dt.timezone.utc)), pl.DataFrame(), 1)
+    k = kpis(_kpi_events(rows, dt.datetime.now(dt.timezone.utc)), None, 1)
     assert Card(LOGIN.label, "2", "1 failed") in k.cards
 
 
 def test_kpis_count_sessions_active_in_window():
     now = dt.datetime.now(dt.timezone.utc)
     events = _kpi_events([("/", 200)], now)
-    sessions = pl.DataFrame(
+    sessions = pl.LazyFrame(
         {
             "end": [now, now - dt.timedelta(minutes=30), now - dt.timedelta(hours=2)],
             "bot_class": ["human_likely", "bot_likely", "bot_likely"],

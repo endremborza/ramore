@@ -6,6 +6,7 @@ from .base import (
     hint,
     plotly_div,
     render_template,
+    stream,
     traces,
     write,
 )
@@ -29,21 +30,19 @@ def render(ctx: RenderContext) -> None:
     )
 
 
-def _req_distribution(sessions: pl.DataFrame) -> str:
-    if sessions.is_empty():
-        return hint("No session data yet.")
-    counts = (
-        sessions.lazy()
-        .group_by(
+def _req_distribution(sessions: pl.LazyFrame | None) -> str:
+    counts = stream(
+        sessions,
+        lambda s: s.group_by(
             pl.col("n_req")
             .bin_intervals(REQ_BREAKS, labels=REQ_LABELS, right_closed=True)
             .cast(pl.String)
             .alias("bucket"),
             "bot_class",
-        )
-        .len()
-        .collect(engine="streaming")
+        ).len(),
     )
+    if counts.is_empty():
+        return hint("No session data yet.")
     return plotly_div(
         "req-dist",
         traces(counts, "bucket", "len", "bot_class", class_style("bar")),

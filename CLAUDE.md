@@ -19,4 +19,4 @@ ramore monitoring and reporting: `ramore report` turns a site's nginx request lo
 - `box/sample.py` runs on the box: stdlib only, Python 3.10+ (Ubuntu 22.04), no import from ramore.
 - `make install` puts the `ramore` command on PATH with the locked versions; a bare `uv tool install` reads no lockfile.
 - One literal per value: a constant is written once, docs name it.
-- The render works on tens of millions of rows: project columns at scan time, aggregate with `collect(engine="streaming")`, never an eager `group_by` over a long-string column of the hot window; a rebuild or reclassify goes one day at a time.
+- The render works on tens of millions of rows: the hot window and its sessions stay `LazyFrame` scans (`archive.scan_hot`, `aggregate.scan_sessions`) projected at scan time, and each page aggregates them with `collect(engine="streaming")`, a quantile in a query of its own; only the last day is collected. A rebuild or reclassify goes one day at a time.

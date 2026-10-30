@@ -8,6 +8,7 @@ from .base import (
     hint,
     plotly_div,
     render_template,
+    stream,
     traces,
     write,
 )
@@ -45,15 +46,10 @@ def _bot_area(daily: pl.DataFrame) -> str:
     )
 
 
-def _top_uas(sessions: pl.DataFrame) -> str:
-    if sessions.is_empty():
+def _top_uas(sessions: pl.LazyFrame | None) -> str:
+    per_class = stream(sessions, lambda s: s.group_by("ua_family", "bot_class").len())
+    if per_class.is_empty():
         return hint("No sessions.")
-    per_class = (
-        sessions.lazy()
-        .group_by("ua_family", "bot_class")
-        .len()
-        .collect(engine="streaming")
-    )
     top = (
         per_class.group_by("ua_family")
         .agg(
