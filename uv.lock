@@ -253,7 +253,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "polars", specifier = ">=2" },
     { name = "protocli", specifier = ">=0.1.0" },
-    { name = "shackleton", specifier = ">=2.0.1" },
+    { name = "shackleton", specifier = ">=2.1.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -261,12 +261,12 @@ dev = [{ name = "pytest", specifier = ">=9.0.3" }]
 
 [[package]]
 name = "shackleton"
-version = "2.0.1"
+version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "polars" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/10/09/f7e36aeb4c89212779b7436d6357000d64186ff3847b575c09e6e4fa7aa8/shackleton-2.0.1.tar.gz", hash = "sha256:1fc354b999335933a3ccaffe70e0b4a2771f8f27fe70d9f693ed17ab32bfd2a9", size = 24729, upload-time = "2026-10-20T10:46:48.46Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2a/c4/f9cb0fc0f66bbe2fcb2ecd936c94a1626240674910166c48f77535a925b8/shackleton-2.1.0.tar.gz", hash = "sha256:9d4e7d8a878187f128ff115e05551db14f19dd651541e7624c7e95868abb6423", size = 25689, upload-time = "2026-10-30T11:36:56.509Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e0/90/903f7ce14fbca020675fcadd244cdccc3a823258add74d1e9c5149bfa0bc/shackleton-2.0.1-py3-none-any.whl", hash = "sha256:aa12c57958dcc4abfe3addf197b2e4293e134f192f529fc00a68f07a5ac16208", size = 16959, upload-time = "2026-10-20T10:46:47.542Z" },
+    { url = "https://files.pythonhosted.org/packages/61/c0/431296637f4a02aa145e322a0c8f99121094f7222516606fd9080775543d/shackleton-2.1.0-py3-none-any.whl", hash = "sha256:392b43d9c5ef4112daeb91f464d70812f4d5106c899daef4823f87a0817fcc4b", size = 17393, upload-time = "2026-10-30T11:36:55.343Z" },
 ]
