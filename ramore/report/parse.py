@@ -24,14 +24,15 @@ COLUMNS = {
     "cs": pl.String,
     "host": pl.String,
 }
+UPSTREAM_TIMES = ("uct", "uht", "urt")
 
 
 def parse_lines(lines: Iterable[str]) -> tuple[pl.DataFrame, int]:
     """Request-log lines (`box.REQUEST_FIELDS`) as typed rows; (df, n_failures).
 
     A line that is not a JSON object with exactly the request keys, or whose time does not
-    parse, is a failure. Upstream times that are not one number (`-`, or a list after a retry)
-    are null. Empty lines are skipped."""
+    parse, is a failure. An upstream time is the sum of the attempts it lists (`_upstream_seconds`).
+    Empty lines are skipped."""
     rows = []
     failures = 0
     for line in lines:
@@ -50,7 +51,9 @@ def parse_lines(lines: Iterable[str]) -> tuple[pl.DataFrame, int]:
     df = raw.with_columns(
         epoch_to_datetime(pl.col("t").cast(pl.Float64, strict=False)),
         *(
-            pl.col(k).cast(dtype, strict=False)
+            _upstream_seconds(k)
+            if k in UPSTREAM_TIMES
+            else pl.col(k).cast(dtype, strict=False)
             for k, dtype in COLUMNS.items()
             if k != "t" and dtype != pl.String
         ),
@@ -59,6 +62,18 @@ def parse_lines(lines: Iterable[str]) -> tuple[pl.DataFrame, int]:
     if n_bad_time:
         df = df.filter(pl.col("t").is_not_null())
     return df, failures + n_bad_time
+
+
+def _upstream_seconds(col: str) -> pl.Expr:
+    """`$upstream_*_time` summed over the attempts it lists: `, ` between the servers a request
+    was retried on, ` : ` between internal redirects, `-` for an attempt without that time. Null
+    without a number (no upstream)."""
+    times = (
+        pl.col(col)
+        .str.extract_all(r"\d+\.\d+")
+        .list.eval(pl.element().cast(COLUMNS[col]))
+    )
+    return pl.when(times.list.len() > 0).then(times.list.sum()).alias(col)
 
 
 def epoch_to_datetime(seconds: pl.Expr) -> pl.Expr:

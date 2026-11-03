@@ -87,11 +87,13 @@ LINE_EMPTY_CS = line(
     ua="curl/8.0",
 )
 
-# A retried upstream logs one time per attempt; no single number.
+# A retried upstream logs one time per attempt, `-` for an attempt that never got a header.
 LINE_RETRY = line(
     "2026-04-28T13:14:22",
     path="/authors/darwin",
     status="502",
+    uct="0.000, 0.001",
+    uht="-, 0.002",
     urt="0.004, 0.002",
     ua="curl/8.0",
 )

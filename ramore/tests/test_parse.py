@@ -1,6 +1,7 @@
 import math
 
 import polars as pl
+import pytest
 
 from ramore.report.parse import keep_live_hosts, parse_lines
 
@@ -20,6 +21,7 @@ from .fixtures import (
     LINE_RETRY,
     LINE_STATUS_000,
     LINE_TORN,
+    line,
 )
 
 
@@ -76,10 +78,20 @@ def test_parse_empty_ua_referrer():
     assert r["referrer"] == ""
 
 
-def test_parse_upstream_retry_is_null():
-    df, fail = parse_lines([LINE_RETRY])
+@pytest.mark.parametrize(
+    "log_line, uct, uht, urt",
+    [
+        (LINE_RETRY, 0.001, 0.002, 0.006),
+        (line("2026-04-28T13:14:22", urt="0.010 : 0.005"), None, None, 0.015),
+    ],
+)
+def test_parse_upstream_times_sum_their_attempts(
+    log_line: str, uct: float | None, uht: float | None, urt: float | None
+):
+    df, fail = parse_lines([log_line])
     assert fail == 0
-    assert df.row(0, named=True)["urt"] is None
+    r = df.row(0, named=True)
+    assert (r["uct"], r["uht"], r["urt"]) == pytest.approx((uct, uht, urt), rel=1e-3)
 
 
 def test_parse_status_000():
