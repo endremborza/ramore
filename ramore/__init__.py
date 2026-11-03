@@ -1,6 +1,6 @@
 """ramore monitoring and reporting."""
 
-__version__ = "0.2.2"
+__version__ = "1.0.0"
 
 # The monitor's User-Agent product; the report counts its probes under this UA family.
 MONITOR_PRODUCT = "ramore-monitor"

@@ -1,3 +1,11 @@
+## v1.0.0
+
+- **Breaking:** the hourly/daily aggregates no longer carry latency quantiles (`urt_mean`, `urt_p50`, `urt_p95`, `urt_p99`, `urt_p999`), only request counts and bytes; the performance page's p99-by-route chart now computes the quantile directly from the last day's events instead of combining per-bucket quantiles.
+- Fixed a unit's `fds`/`fd_limit` metric: it now reports the open fds and limit of its fullest process, instead of summing fds across processes against the lowest limit, so a multi-process unit (e.g. nginx with one worker per CPU) no longer falsely trips the fds alert.
+- Fixed upstream request times (`uct`, `uht`, `urt`): a retried or internally-redirected request now sums the times for each attempt instead of being recorded as null, so retried requests are no longer dropped from latency figures.
+
+---
+
 ## v0.2.2
 
 - Bump the required shackleton version to 2.1.0.
