@@ -3,6 +3,7 @@ from pathlib import Path
 
 import polars as pl
 
+from ramore import config
 from ramore.box import sample
 from ramore.report import metrics
 
@@ -12,19 +13,27 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text)
 
 
-def _fake_box(tmp_path: Path) -> tuple[str, str]:
-    proc, cg = tmp_path / "proc", tmp_path / "cgroup"
+def _meminfo(proc: Path) -> None:
     _write(
         proc / "meminfo", "MemTotal: 1000 kB\nMemFree: 100 kB\nMemAvailable: 400 kB\n"
     )
+
+
+def _process(proc: Path, pid: int, n_fds: int, soft: str) -> None:
+    for fd in range(n_fds):
+        _write(proc / str(pid) / "fd" / str(fd), "")
+    _write(
+        proc / str(pid) / "limits",
+        "Limit Soft Limit Hard Limit Units\n"
+        f"Max open files            {soft}                 65536                files\n",
+    )
+
+
+def _fake_box(tmp_path: Path) -> tuple[str, str]:
+    proc, cg = tmp_path / "proc", tmp_path / "cgroup"
+    _meminfo(proc)
     for pid, n_fds, soft in ((101, 3, "1024"), (102, 1, "4096"), (103, 2, "unlimited")):
-        for fd in range(n_fds):
-            _write(proc / str(pid) / "fd" / str(fd), "")
-        _write(
-            proc / str(pid) / "limits",
-            "Limit Soft Limit Hard Limit Units\n"
-            f"Max open files            {soft}                 65536                files\n",
-        )
+        _process(proc, pid, n_fds, soft)
     nginx = cg / "system.slice" / "nginx.service"
     _write(nginx / "memory.current", "5000\n")
     _write(nginx / "memory.max", "max\n")
@@ -65,8 +74,21 @@ def test_sample_rows(tmp_path: Path):
         "fd_limit": 1024,
     }
     assert nginx["procs"] == 2  # 999 exited: listed, no fds
-    assert (web["fds"], web["fd_limit"], web["procs"], web["anon"]) == (3, 4096, 2, 600)
+    assert (web["fds"], web["fd_limit"], web["procs"], web["anon"]) == (1, 4096, 2, 600)
     assert {k for r in rows for k in r} <= set(metrics.SCHEMA)
+
+
+def test_fds_alert_reads_each_process_against_its_own_limit(tmp_path: Path):
+    proc, cg = tmp_path / "proc", tmp_path / "cgroup"
+    _meminfo(proc)
+    for pid in (201, 202):
+        _process(proc, pid, 3, "4")
+    _write(cg / "system.slice" / "nginx.service" / "cgroup.procs", "201\n202\n")
+    cfg = {"mounts": [], "units": ["nginx.service"]}
+    rows = sample.sample(cfg, proc=str(proc), cgroup=str(cg))
+    df, _ = metrics.parse_lines(json.dumps(r) for r in rows)
+    (fds,) = (c for c in metrics.checks(df, config.Alerts()) if c.key.startswith("fds"))
+    assert fds.ok, fds.detail
 
 
 def test_main_appends_lines_metrics_parses(tmp_path: Path, monkeypatch):

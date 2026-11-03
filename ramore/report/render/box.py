@@ -37,7 +37,7 @@ def render(ctx: RenderContext) -> None:
             ),
             "anon": _chart("unit-anon", units, "anon_gb", "GB"),
             "mem": _chart("unit-mem", units, "used_gb", "GB"),
-            "fds": _chart("unit-fds", units, "fds", "open files"),
+            "fds": _chart("unit-fds", units, "fds", "open files, fullest process"),
         }
         latest = _latest_table(df)
     write(

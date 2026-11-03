@@ -4,7 +4,8 @@ Runs on the box with the stdlib alone, as root under ramore's sampler timer:
 `python3 -I -S sample.py <config.json>`. The config names the log, the mounts and the unit globs.
 Each line is one scope at time `t`: `host` (memory), a mount (disk) or a unit, matched by its
 cgroup directory, which systemd names after the unit. `used`/`limit` is the fill of each scope;
-a unit adds `anon` memory, its open fds, their per-process limit and its process count.
+a unit adds `anon` memory, the open fds and soft limit of its process nearest that limit, and
+its process count.
 """
 
 import fnmatch
@@ -69,15 +70,14 @@ def _unit_dirs(cgroup: str, globs: list[str]) -> dict[str, str]:
 
 def _unit(name: str, path: str, proc: str) -> dict:
     pids = _pids(path)
-    fds, limits = 0, []
+    open_files = []
     for pid in pids:
         try:
-            fds += len(os.listdir(f"{proc}/{pid}/fd"))
-            limit = _open_files_limit(f"{proc}/{pid}/limits")
+            fds = len(os.listdir(f"{proc}/{pid}/fd"))
+            open_files.append((fds, _open_files_limit(f"{proc}/{pid}/limits")))
         except (FileNotFoundError, ProcessLookupError):
             continue
-        if limit is not None:
-            limits.append(limit)
+    fds, fd_limit = max(open_files, key=_fd_fill, default=(0, None))
     return {
         "scope": "unit",
         "name": name,
@@ -85,9 +85,16 @@ def _unit(name: str, path: str, proc: str) -> dict:
         "limit": _read_int(f"{path}/memory.max"),
         "anon": _stat_field(f"{path}/memory.stat", "anon"),
         "fds": fds,
-        "fd_limit": min(limits, default=None),
+        "fd_limit": fd_limit,
         "procs": len(pids),
     }
+
+
+def _fd_fill(open_files: tuple[int, int | None]) -> tuple[bool, float]:
+    """Ranks a process by its open fds against its own soft limit; unlimited ones rank below
+    every limited one, by count."""
+    fds, limit = open_files
+    return (limit is not None, fds / limit if limit else fds)
 
 
 def _pids(path: str) -> list[int]:
