@@ -11,6 +11,7 @@ from .base import (
 )
 
 TOP_ROUTES_CHARTED = 8
+P99_BUCKET = "1h"
 SLOW_SHOWN = 100
 CACHE_DAYS = 7
 _QUANTILES = ((50, 0.5), (95, 0.95), (99, 0.99))
@@ -26,7 +27,8 @@ def render(ctx: RenderContext) -> None:
             active_page="performance",
             depth=0,
             route_table=_route_table(ctx.events_24h),
-            p99_chart=_p99_per_route_chart(ctx.hourly),
+            p99_chart=_p99_per_route_chart(ctx.events_24h),
+            top_routes=TOP_ROUTES_CHARTED,
             cache_chart=_cache_hit_chart(ctx.hourly),
             slow_table=_slow_requests(ctx.events_24h),
         ),
@@ -54,27 +56,28 @@ def _route_table(events: pl.DataFrame) -> str:
     return df_to_html(g, table_id="route-perf")
 
 
-def _p99_per_route_chart(hourly: pl.DataFrame) -> str:
-    if hourly.is_empty():
+def _p99_per_route_chart(events: pl.DataFrame) -> str:
+    if events.is_empty():
         return hint("No data.")
-    recent = hourly.filter(
-        pl.col("bucket") >= hourly["bucket"].max() - pl.duration(days=1)
-    )
-    top = (
-        recent.group_by("route_template")
-        .agg(pl.col("n").sum())
-        .sort(["n", "route_template"], descending=[True, False])
-        .head(TOP_ROUTES_CHARTED)["route_template"]
-    )
-    g = (
-        recent.filter(pl.col("route_template").is_in(top.implode()))
-        .group_by("bucket", "route_template")
-        .agg((pl.col("urt_p99").max() * 1000).alias("p99_ms"))
-    )
     return plotly_div(
         "p99-routes",
-        traces(g, "bucket", "p99_ms", "route_template"),
+        traces(p99_per_route(events), "bucket", "p99_ms", "route_template"),
         layout={"yaxis": {"title": "p99 ms"}},
+    )
+
+
+def p99_per_route(events: pl.DataFrame) -> pl.DataFrame:
+    """The p99 upstream time per `P99_BUCKET` of the `TOP_ROUTES_CHARTED` busiest routes."""
+    top = (
+        events.group_by("route_template")
+        .len()
+        .sort(["len", "route_template"], descending=[True, False])
+        .head(TOP_ROUTES_CHARTED)["route_template"]
+    )
+    return (
+        events.filter(pl.col("route_template").is_in(top.implode()))
+        .group_by(pl.col("t").dt.truncate(P99_BUCKET).alias("bucket"), "route_template")
+        .agg((pl.col("urt").quantile(0.99) * 1000).alias("p99_ms"))
     )
 
 

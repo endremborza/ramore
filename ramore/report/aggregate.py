@@ -1,4 +1,4 @@
-"""Per-bucket request counts and latency quantiles (`LEVELS`), and the sessions table."""
+"""Per-bucket request counts and bytes (`LEVELS`), and the sessions table."""
 
 import datetime as dt
 
@@ -10,7 +10,7 @@ from . import archive
 
 LEVELS = {"hourly": "1h", "daily": "1d"}
 GROUP_KEYS = ["bucket", "route_template", "status_family", "bot_class", "cs"]
-AGG_COLS = ["t", "status", "cs", "bot_class", "urt", "size", "route_template"]
+AGG_COLS = ["t", "status", "cs", "bot_class", "size", "route_template"]
 
 
 def rebuild() -> dict[str, int]:
@@ -73,7 +73,6 @@ def scan_sessions(date_from: dt.date, columns: list[str]) -> pl.LazyFrame | None
 
 
 def _agg_block(df: pl.DataFrame, every: str) -> pl.DataFrame:
-    urt = pl.col("urt").fill_nan(None)
     return (
         df.lazy()
         .with_columns(
@@ -91,11 +90,6 @@ def _agg_block(df: pl.DataFrame, every: str) -> pl.DataFrame:
         .agg(
             pl.len().alias("n"),
             pl.col("size").sum().alias("bytes"),
-            urt.mean().alias("urt_mean"),
-            urt.quantile(0.5).alias("urt_p50"),
-            urt.quantile(0.95).alias("urt_p95"),
-            urt.quantile(0.99).alias("urt_p99"),
-            urt.quantile(0.999).alias("urt_p999"),
         )
         .sort("bucket")
         .collect(engine="streaming")

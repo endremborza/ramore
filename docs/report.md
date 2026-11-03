@@ -45,11 +45,15 @@ Under `store` (keep it out of git):
 
 - `archive/year_month=YYYY-MM/day=DD/`: hot, one row per request, within `COLD_AFTER_DAYS`.
 - `archive-cold/year_month=YYYY-MM/day=DD/`: the hot days past `COLD_AFTER_DAYS`, one partition per day, heavier zstd, without `archive.FREE_TEXT_COLUMNS`. A run's compaction reads only the days it moves, whatever the cold archive already holds; a day already cold (a request arriving after its move) gains the hot rows it lacks, and the aggregates read a day wherever it is stored.
-- `aggregates/{hourly,daily,sessions}/`: per-bucket counts and latency quantiles by route, status family, bot class and cache status (`aggregate.LEVELS`); one row per session (`classify.SESSION_SCHEMA`).
+- `aggregates/{hourly,daily,sessions}/`: per-bucket request counts and bytes by route, status family, bot class and cache status (`aggregate.LEVELS`); one row per session (`classify.SESSION_SCHEMA`). No latency: a quantile does not combine across groups, so every latency figure is computed from the events.
 - `metrics/year_month=YYYY-MM/`: the box samples, one row per scope and sample.
 - `site/` (raw values, local only), `site-public/` (anonymized, published), `logs/`, `state.json`, `salts.json`.
 
 The hot archive's columns are `archive.HOT_COLUMNS`. `route_template`, `ua_family`, `bot_class` and `session_id` are written at archive time, so a change to the route table or the rules applies to new rows; `ramore report --reclassify-all` re-classifies the hot days one at a time (not their templates; a session crossing midnight is classified per day) and rebuilds the aggregates. A rebuild aggregates the archive one day at a time, hot and cold alike.
+
+## Cost
+
+Measured on rankless's store with ubemmer's `ramore` suite (case `private-rankless`: the store as a day's first run finds it, 91 hot days and a longest `landing.WINDOWS` window of 88.5M requests and 26.2M sessions, and that run's pull of `units.REPORT_EVERY_H` hours, 361k lines) on a 20-thread machine. The timer's run (ingest, aggregate, render the public site) takes 8 s wall and 29 s CPU and peaks at 3.8 GiB, in the render: the landing page's KPI counts over its longest window stream the window's `cs` and `route_template`, which alone costs about 2 GiB in polars' reader. Ingest peaks at 1.0 GiB, and a day's move into its cold partition at 1.4 GiB. A backlog costs time rather than memory: a day's 3.25M lines, pulled in `pull.PULL_CHUNK_BYTES` chunks, peak at 4.3 GiB in 70 s. `--reclassify-all` (44.2M sessions, then a rebuild over 252.6M requests) takes 144 s wall, 1,130 s CPU and 5.6 GiB; a rebuild alone takes 7 s and 1.3 GiB. Every one of these fits under `units.REPORT_MEMORY_MAX`.
 
 ## Anonymization
 

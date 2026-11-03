@@ -4,12 +4,14 @@ import json
 import re
 
 import polars as pl
+import pytest
 
 from ramore import SITE_STATE, config, demo
 from ramore.demo import LOGIN
 from ramore.report import aggregate, metrics, run, state
 from ramore.report.render import PAGES, render_all
 from ramore.report.render.landing import Card, kpis
+from ramore.report.render.performance import p99_per_route
 
 IP = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
 SCRIPT_PATH = "/<script>alert(1)</script>"
@@ -123,3 +125,16 @@ def test_kpis_count_sessions_active_in_window():
     day = kpis(events, sessions, 24)
     assert Card("Sessions", "3") in day.cards
     assert {s.cls: s.n for s in day.classes} == {"bot_likely": 2, "human_likely": 1}
+
+
+def test_p99_per_route_takes_the_quantile_over_all_its_requests():
+    t = dt.datetime(2026, 7, 5, 12, tzinfo=dt.timezone.utc)
+    events = pl.DataFrame(
+        {
+            "t": [t] * 1000,
+            "route_template": ["/x"] * 1000,
+            "status": [200] * 999 + [504],
+            "urt": pl.Series([0.01] * 999 + [30.0], dtype=pl.Float32),
+        }
+    )
+    assert p99_per_route(events)["p99_ms"].to_list() == pytest.approx([10], rel=1e-3)
